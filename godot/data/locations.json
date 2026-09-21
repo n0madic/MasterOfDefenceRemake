@@ -1,0 +1,182 @@
+{
+ "1": {
+  "bounds": {
+   "x_min": 50,
+   "x_max": 70,
+   "z_min": -40,
+   "z_max": 0
+  },
+  "first_raid": 1,
+  "last_raid": 15,
+  "raids": 15,
+  "ground_texture": "res://assets/textures/Towers/dno1.png",
+  "tower_tint_rgb": [
+   255,
+   255,
+   255
+  ],
+  "scene": "res://assets/models/Location1/Location1.glb",
+  "path_scene": "res://assets/models/Location1/Path1.glb",
+  "music": "res://assets/audio/music1.ogg",
+  "start_gold": 220,
+  "balloon": false,
+  "shadows": true,
+  "clear_color": [
+   0,
+   0,
+   0
+  ],
+  "decoration": "clock",
+  "tutorial_page": 1
+ },
+ "2": {
+  "bounds": {
+   "x_min": 10,
+   "x_max": 110,
+   "z_min": -100,
+   "z_max": 0
+  },
+  "first_raid": 16,
+  "last_raid": 45,
+  "raids": 30,
+  "ground_texture": "res://assets/textures/Towers/dno2.png",
+  "tower_tint_rgb": [
+   255,
+   255,
+   255
+  ],
+  "scene": "res://assets/models/Location2/Location2.glb",
+  "path_scene": "res://assets/models/Location2/Path1.glb",
+  "music": "res://assets/audio/music2.ogg",
+  "start_gold": 240,
+  "balloon": false,
+  "shadows": true,
+  "clear_color": [
+   0,
+   0,
+   0
+  ],
+  "decoration": "eagle",
+  "tutorial_page": 8
+ },
+ "3": {
+  "bounds": {
+   "x_min": 10,
+   "x_max": 70,
+   "z_min": -85,
+   "z_max": 0
+  },
+  "first_raid": 46,
+  "last_raid": 70,
+  "raids": 25,
+  "ground_texture": "res://assets/textures/Towers/dno3.png",
+  "tower_tint_rgb": [
+   255,
+   255,
+   255
+  ],
+  "scene": "res://assets/models/Location3/Location3.glb",
+  "path_scene": "res://assets/models/Location3/Path1.glb",
+  "music": "res://assets/audio/music3.ogg",
+  "start_gold": 260,
+  "balloon": false,
+  "shadows": true,
+  "clear_color": [
+   0,
+   0,
+   0
+  ],
+  "decoration": null,
+  "tutorial_page": 0
+ },
+ "4": {
+  "bounds": {
+   "x_min": 75,
+   "x_max": 140,
+   "z_min": -100,
+   "z_max": -5
+  },
+  "first_raid": 71,
+  "last_raid": 100,
+  "raids": 30,
+  "ground_texture": "res://assets/textures/Towers/dno4.png",
+  "tower_tint_rgb": [
+   255,
+   255,
+   255
+  ],
+  "scene": "res://assets/models/Location4/Location4.glb",
+  "path_scene": "res://assets/models/Location4/Path1.glb",
+  "music": "res://assets/audio/music4.ogg",
+  "start_gold": 280,
+  "balloon": true,
+  "shadows": true,
+  "clear_color": [
+   0,
+   0,
+   0
+  ],
+  "decoration": null,
+  "tutorial_page": 9
+ },
+ "5": {
+  "bounds": {
+   "x_min": 50,
+   "x_max": 145,
+   "z_min": -100,
+   "z_max": 0
+  },
+  "first_raid": 101,
+  "last_raid": 135,
+  "raids": 35,
+  "ground_texture": "res://assets/textures/Towers/dno5.png",
+  "tower_tint_rgb": [
+   255,
+   255,
+   255
+  ],
+  "scene": "res://assets/models/Location5/Location5.glb",
+  "path_scene": "res://assets/models/Location5/Path1.glb",
+  "music": "res://assets/audio/music5.ogg",
+  "start_gold": 300,
+  "balloon": true,
+  "shadows": true,
+  "clear_color": [
+   0,
+   0,
+   0
+  ],
+  "decoration": null,
+  "tutorial_page": 0
+ },
+ "6": {
+  "bounds": {
+   "x_min": 5,
+   "x_max": 105,
+   "z_min": -150,
+   "z_max": 0
+  },
+  "first_raid": 136,
+  "last_raid": 180,
+  "raids": 45,
+  "ground_texture": "res://assets/textures/Towers/dno6.png",
+  "tower_tint_rgb": [
+   255,
+   255,
+   255
+  ],
+  "scene": "res://assets/models/Location6/Location6.glb",
+  "path_scene": "res://assets/models/Location6/Path1.glb",
+  "music": "res://assets/audio/music6.ogg",
+  "start_gold": 320,
+  "balloon": true,
+  "shadows": false,
+  "clear_color": [
+   192,
+   212,
+   223
+  ],
+  "decoration": null,
+  "tutorial_page": 0
+ }
+}

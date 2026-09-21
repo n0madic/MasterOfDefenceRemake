@@ -1,0 +1,8 @@
+*.exe
+*unpacked
+__pycache__
+.godot
+.vscode
+godot/assets/
+reference/
+build/

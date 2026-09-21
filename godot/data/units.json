@@ -1,0 +1,342 @@
+[
+ {
+  "id": 1,
+  "name": "Crawl",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Crawl.glb",
+  "texture": "res://assets/textures/Monsters/Crawl.jpg"
+ },
+ {
+  "id": 2,
+  "name": "Hairy",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Hairy.glb",
+  "texture": "res://assets/textures/Monsters/Hairy.jpg"
+ },
+ {
+  "id": 3,
+  "name": "Natt",
+  "air": false,
+  "anim_speed": 2.3,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Natt.glb",
+  "texture": "res://assets/textures/Monsters/Natt.jpg"
+ },
+ {
+  "id": 4,
+  "name": "Ugr",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Ugr.glb",
+  "texture": "res://assets/textures/Monsters/Ugr.jpg"
+ },
+ {
+  "id": 5,
+  "name": "Gor",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Gor.glb",
+  "texture": "res://assets/textures/Monsters/Gor.jpg"
+ },
+ {
+  "id": 6,
+  "name": "Fats",
+  "air": false,
+  "anim_speed": 2.7,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Fats.glb",
+  "texture": "res://assets/textures/Monsters/Fats.jpg"
+ },
+ {
+  "id": 7,
+  "name": "Ratter",
+  "air": true,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Ratter.glb",
+  "texture": "res://assets/textures/Monsters/Ratter.jpg"
+ },
+ {
+  "id": 8,
+  "name": "Ded",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Ded.glb",
+  "texture": "res://assets/textures/Monsters/Ded.jpg"
+ },
+ {
+  "id": 9,
+  "name": "Dino",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Dino.glb",
+  "texture": "res://assets/textures/Monsters/Dino.jpg"
+ },
+ {
+  "id": 10,
+  "name": "Nite",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Nite.glb",
+  "texture": "res://assets/textures/Monsters/Nite.jpg"
+ },
+ {
+  "id": 11,
+  "name": "Mini",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Mini.glb",
+  "texture": "res://assets/textures/Monsters/Mini.jpg"
+ },
+ {
+  "id": 12,
+  "name": "Bobby",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Bobby.glb",
+  "texture": "res://assets/textures/Monsters/Bobby.jpg"
+ },
+ {
+  "id": 13,
+  "name": "Spi",
+  "air": false,
+  "anim_speed": 4.3,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Spi.glb",
+  "texture": "res://assets/textures/Monsters/Spi.jpg"
+ },
+ {
+  "id": 14,
+  "name": "Head",
+  "air": true,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Head.glb",
+  "texture": "res://assets/textures/Monsters/Head.jpg"
+ },
+ {
+  "id": 15,
+  "name": "Zaur",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Zaur.glb",
+  "texture": "res://assets/textures/Monsters/Zaur.jpg"
+ },
+ {
+  "id": 16,
+  "name": "Spikey",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Spikey.glb",
+  "texture": "res://assets/textures/Monsters/Spikey.jpg"
+ },
+ {
+  "id": 17,
+  "name": "Mol",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Mol.glb",
+  "texture": "res://assets/textures/Monsters/Mol.jpg"
+ },
+ {
+  "id": 18,
+  "name": "Cat",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Cat.glb",
+  "texture": "res://assets/textures/Monsters/Cat.jpg"
+ },
+ {
+  "id": 19,
+  "name": "Skeleton",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Skeleton.glb",
+  "texture": "res://assets/textures/Monsters/Skeleton.jpg"
+ },
+ {
+  "id": 20,
+  "name": "Gend",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Gend.glb",
+  "texture": "res://assets/textures/Monsters/Gend.jpg"
+ },
+ {
+  "id": 21,
+  "name": "TwoEyed",
+  "air": true,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/TwoEyed.glb",
+  "texture": "res://assets/textures/Monsters/TwoEyed.jpg"
+ },
+ {
+  "id": 22,
+  "name": "Dotle",
+  "air": false,
+  "anim_speed": 2.8,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Dotle.glb",
+  "texture": "res://assets/textures/Monsters/Dotle.jpg"
+ },
+ {
+  "id": 23,
+  "name": "Thorn",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Thorn.glb",
+  "texture": "res://assets/textures/Monsters/Thorn.jpg"
+ },
+ {
+  "id": 24,
+  "name": "Sve",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Sve.glb",
+  "texture": "res://assets/textures/Monsters/Sve.jpg"
+ },
+ {
+  "id": 25,
+  "name": "Spryth",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Spryth.glb",
+  "texture": "res://assets/textures/Monsters/Spryth.jpg"
+ },
+ {
+  "id": 26,
+  "name": "Elle",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Elle.glb",
+  "texture": "res://assets/textures/Monsters/Elle.jpg"
+ },
+ {
+  "id": 27,
+  "name": "Rokk",
+  "air": false,
+  "anim_speed": 2.3,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Rokk.glb",
+  "texture": "res://assets/textures/Monsters/Rokk.jpg"
+ },
+ {
+  "id": 28,
+  "name": "Sepp",
+  "air": true,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Sepp.glb",
+  "texture": "res://assets/textures/Monsters/Sepp.jpg"
+ },
+ {
+  "id": 29,
+  "name": "Tall",
+  "air": false,
+  "anim_speed": 0.8,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Tall.glb",
+  "texture": "res://assets/textures/Monsters/Tall.jpg"
+ },
+ {
+  "id": 30,
+  "name": "Plant",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Plant.glb",
+  "texture": "res://assets/textures/Monsters/Plant.jpg"
+ },
+ {
+  "id": 31,
+  "name": "Health",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 40,
+  "worker": false,
+  "model": "res://assets/models/Monsters/Health.glb",
+  "texture": null
+ },
+ {
+  "id": 32,
+  "name": "Male",
+  "air": false,
+  "anim_speed": 2.6,
+  "healer": 0,
+  "worker": true,
+  "model": "res://assets/models/Monsters/male.glb",
+  "texture": "res://assets/textures/Monsters/male.jpg"
+ },
+ {
+  "id": 33,
+  "name": "Female",
+  "air": false,
+  "anim_speed": 2.6,
+  "healer": 0,
+  "worker": true,
+  "model": "res://assets/models/Monsters/female.glb",
+  "texture": "res://assets/textures/Monsters/female.jpg"
+ },
+ {
+  "id": 34,
+  "name": "Gnome",
+  "air": false,
+  "anim_speed": 2.0,
+  "healer": 0,
+  "worker": true,
+  "model": "res://assets/models/Monsters/Gnome.glb",
+  "texture": "res://assets/textures/Monsters/Gnome.jpg"
+ }
+]

@@ -1,0 +1,104 @@
+{
+ "location1": {
+  "frames": 20,
+  "usable_length": 97.7,
+  "mean_step": 5.14,
+  "runs": [
+   {
+    "raid_speed": 1.03,
+    "ticks": 938,
+    "seconds": 15.6
+   },
+   {
+    "raid_speed": 1.45,
+    "ticks": 668,
+    "seconds": 11.1
+   }
+  ]
+ },
+ "location2": {
+  "frames": 100,
+  "usable_length": 431.6,
+  "mean_step": 4.36,
+  "runs": [
+   {
+    "raid_speed": 1.03,
+    "ticks": 4144,
+    "seconds": 69.1
+   },
+   {
+    "raid_speed": 1.9,
+    "ticks": 2247,
+    "seconds": 37.5
+   }
+  ]
+ },
+ "location3": {
+  "frames": 30,
+  "usable_length": 197.9,
+  "mean_step": 6.82,
+  "runs": [
+   {
+    "raid_speed": 1.03,
+    "ticks": 1902,
+    "seconds": 31.7
+   },
+   {
+    "raid_speed": 1.8,
+    "ticks": 1088,
+    "seconds": 18.1
+   }
+  ]
+ },
+ "location4": {
+  "frames": 80,
+  "usable_length": 422.0,
+  "mean_step": 5.34,
+  "runs": [
+   {
+    "raid_speed": 1.03,
+    "ticks": 4080,
+    "seconds": 68.0
+   },
+   {
+    "raid_speed": 2.0,
+    "ticks": 2103,
+    "seconds": 35.0
+   }
+  ]
+ },
+ "location5": {
+  "frames": 70,
+  "usable_length": 339.3,
+  "mean_step": 4.92,
+  "runs": [
+   {
+    "raid_speed": 1.03,
+    "ticks": 3279,
+    "seconds": 54.6
+   },
+   {
+    "raid_speed": 2.1,
+    "ticks": 1609,
+    "seconds": 26.8
+   }
+  ]
+ },
+ "location6": {
+  "frames": 100,
+  "usable_length": 599.2,
+  "mean_step": 6.05,
+  "runs": [
+   {
+    "raid_speed": 1.03,
+    "ticks": 5801,
+    "seconds": 96.7
+   },
+   {
+    "raid_speed": 3.0,
+    "ticks": 1992,
+    "seconds": 33.2
+   }
+  ]
+ }
+}

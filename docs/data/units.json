@@ -1,0 +1,342 @@
+[
+ {
+  "id": 1,
+  "name": "Crawl",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Crawl.md2",
+  "texture": "Monsters/Crawl.jpg"
+ },
+ {
+  "id": 2,
+  "name": "Hairy",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Hairy.md2",
+  "texture": "Monsters/Hairy.jpg"
+ },
+ {
+  "id": 3,
+  "name": "Natt",
+  "air": false,
+  "anim_speed": 2.3,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Natt.md2",
+  "texture": "Monsters/Natt.jpg"
+ },
+ {
+  "id": 4,
+  "name": "Ugr",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Ugr.md2",
+  "texture": "Monsters/Ugr.jpg"
+ },
+ {
+  "id": 5,
+  "name": "Gor",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Gor.md2",
+  "texture": "Monsters/Gor.jpg"
+ },
+ {
+  "id": 6,
+  "name": "Fats",
+  "air": false,
+  "anim_speed": 2.7,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Fats.md2",
+  "texture": "Monsters/Fats.jpg"
+ },
+ {
+  "id": 7,
+  "name": "Ratter",
+  "air": true,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Ratter.md2",
+  "texture": "Monsters/Ratter.jpg"
+ },
+ {
+  "id": 8,
+  "name": "Ded",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Ded.md2",
+  "texture": "Monsters/Ded.jpg"
+ },
+ {
+  "id": 9,
+  "name": "Dino",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Dino.md2",
+  "texture": "Monsters/Dino.jpg"
+ },
+ {
+  "id": 10,
+  "name": "Nite",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Nite.md2",
+  "texture": "Monsters/Nite.jpg"
+ },
+ {
+  "id": 11,
+  "name": "Mini",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Mini.md2",
+  "texture": "Monsters/Mini.jpg"
+ },
+ {
+  "id": 12,
+  "name": "Bobby",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Bobby.md2",
+  "texture": "Monsters/Bobby.jpg"
+ },
+ {
+  "id": 13,
+  "name": "Spi",
+  "air": false,
+  "anim_speed": 4.3,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Spi.md2",
+  "texture": "Monsters/Spi.jpg"
+ },
+ {
+  "id": 14,
+  "name": "Head",
+  "air": true,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Head.md2",
+  "texture": "Monsters/Head.jpg"
+ },
+ {
+  "id": 15,
+  "name": "Zaur",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Zaur.md2",
+  "texture": "Monsters/Zaur.jpg"
+ },
+ {
+  "id": 16,
+  "name": "Spikey",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Spikey.md2",
+  "texture": "Monsters/Spikey.jpg"
+ },
+ {
+  "id": 17,
+  "name": "Mol",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Mol.md2",
+  "texture": "Monsters/Mol.jpg"
+ },
+ {
+  "id": 18,
+  "name": "Cat",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Cat.md2",
+  "texture": "Monsters/Cat.jpg"
+ },
+ {
+  "id": 19,
+  "name": "Skeleton",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Skeleton.md2",
+  "texture": "Monsters/Skeleton.jpg"
+ },
+ {
+  "id": 20,
+  "name": "Gend",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Gend.md2",
+  "texture": "Monsters/Gend.jpg"
+ },
+ {
+  "id": 21,
+  "name": "TwoEyed",
+  "air": true,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/TwoEyed.md2",
+  "texture": "Monsters/TwoEyed.jpg"
+ },
+ {
+  "id": 22,
+  "name": "Dotle",
+  "air": false,
+  "anim_speed": 2.8,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Dotle.md2",
+  "texture": "Monsters/Dotle.jpg"
+ },
+ {
+  "id": 23,
+  "name": "Thorn",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Thorn.md2",
+  "texture": "Monsters/Thorn.jpg"
+ },
+ {
+  "id": 24,
+  "name": "Sve",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Sve.md2",
+  "texture": "Monsters/Sve.jpg"
+ },
+ {
+  "id": 25,
+  "name": "Spryth",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Spryth.md2",
+  "texture": "Monsters/Spryth.jpg"
+ },
+ {
+  "id": 26,
+  "name": "Elle",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Elle.md2",
+  "texture": "Monsters/Elle.jpg"
+ },
+ {
+  "id": 27,
+  "name": "Rokk",
+  "air": false,
+  "anim_speed": 2.3,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Rokk.md2",
+  "texture": "Monsters/Rokk.jpg"
+ },
+ {
+  "id": 28,
+  "name": "Sepp",
+  "air": true,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Sepp.md2",
+  "texture": "Monsters/Sepp.jpg"
+ },
+ {
+  "id": 29,
+  "name": "Tall",
+  "air": false,
+  "anim_speed": 0.8,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Tall.md2",
+  "texture": "Monsters/Tall.jpg"
+ },
+ {
+  "id": 30,
+  "name": "Plant",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 0,
+  "worker": false,
+  "model": "Monsters/Plant.md2",
+  "texture": "Monsters/Plant.jpg"
+ },
+ {
+  "id": 31,
+  "name": "Health",
+  "air": false,
+  "anim_speed": 2.5,
+  "healer": 40,
+  "worker": false,
+  "model": "Monsters/Health.b3d",
+  "texture": null
+ },
+ {
+  "id": 32,
+  "name": "Male",
+  "air": false,
+  "anim_speed": 2.6,
+  "healer": 0,
+  "worker": true,
+  "model": "Monsters/Male.md2",
+  "texture": "Monsters/Male.jpg"
+ },
+ {
+  "id": 33,
+  "name": "Female",
+  "air": false,
+  "anim_speed": 2.6,
+  "healer": 0,
+  "worker": true,
+  "model": "Monsters/Female.md2",
+  "texture": "Monsters/Female.jpg"
+ },
+ {
+  "id": 34,
+  "name": "Gnome",
+  "air": false,
+  "anim_speed": 2.0,
+  "healer": 0,
+  "worker": true,
+  "model": "Monsters/Gnome.md2",
+  "texture": "Monsters/Gnome.jpg"
+ }
+]
