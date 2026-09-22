@@ -1,0 +1,118 @@
+-- Render script emulating Blitz3D's draw order (see godot/addons/b3d_import):
+-- entities with a positive EntityOrder first, highest order first, with the z-buffer off;
+-- then the opaque brushes with depth write; then the alpha / additive / multiplied ones
+-- with the depth test only, sorted back to front by Defold (per mesh origin, like Blitz).
+-- The pass list comes from generated/level_data.lua; a material's tags name its pass.
+local level = require("generated.level_data")
+local screen = require("main.screen")
+
+-- The world and the HUD panel keep the original 4:3 framing in a centred box (the gui is
+-- fitted into the same box by the engine's ADJUST_FIT, and main/screen.lua maps the mouse
+-- into it); the rest of the window stays at the clear colour.
+local function game_viewport(w, h)
+	local s = math.min(w / screen.WIDTH, h / screen.HEIGHT)
+	local vw, vh = math.floor(screen.WIDTH * s), math.floor(screen.HEIGHT * s)
+	return math.floor((w - vw) / 2), math.floor((h - vh) / 2), vw, vh
+end
+
+local BLEND_FUNCS = {
+	blend = {graphics.BLEND_FACTOR_SRC_ALPHA, graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA},
+	add = {graphics.BLEND_FACTOR_SRC_ALPHA, graphics.BLEND_FACTOR_ONE},
+	mul = {graphics.BLEND_FACTOR_DST_COLOR, graphics.BLEND_FACTOR_ZERO},
+}
+
+local function set_state(pass)
+	if pass.depth_test then
+		render.enable_state(graphics.STATE_DEPTH_TEST)
+	else
+		render.disable_state(graphics.STATE_DEPTH_TEST)
+	end
+	render.set_depth_mask(pass.depth_write)
+	local blend = BLEND_FUNCS[pass.blend]
+	if blend then
+		render.enable_state(graphics.STATE_BLEND)
+		render.set_blend_func(blend[1], blend[2])
+	else
+		render.disable_state(graphics.STATE_BLEND)
+	end
+end
+
+local function make_passes(list)
+	local out = {}
+	for _, pass in ipairs(list) do
+		table.insert(out, {predicate = render.predicate(pass.tags), state = pass})
+	end
+	return out
+end
+
+function init(self)
+	self.passes = make_passes(level.passes)
+	-- The HUD panel hangs on the camera and is drawn over a cleared depth buffer.
+	self.hud_passes = make_passes(level.hud_passes)
+	self.gui_predicate = render.predicate({"gui"})
+	self.text_predicate = render.predicate({"text"})
+	self.gui_projection = vmath.matrix4()
+	-- The HUD panel is drawn by a fixed camera at the origin (matching camera.go: fov 0.8173,
+	-- 4:3, near 0.5, far 600) so it never moves with the scrolling world camera.
+	self.hud_projection = vmath.matrix4_perspective(0.8173, 4 / 3, 0.5, 600)
+	local c = level.clear_color
+	self.clear_buffers = {
+		[graphics.BUFFER_TYPE_COLOR0_BIT] = vmath.vector4(c[1], c[2], c[3], 1),
+		[graphics.BUFFER_TYPE_DEPTH_BIT] = 1,
+		[graphics.BUFFER_TYPE_STENCIL_BIT] = 0,
+	}
+end
+
+function update(self)
+	local window_width = render.get_window_width()
+	local window_height = render.get_window_height()
+	if window_width == 0 or window_height == 0 then
+		return
+	end
+	render.set_depth_mask(true)
+	render.set_stencil_mask(0xff)
+	render.clear(self.clear_buffers)
+	render.set_viewport(game_viewport(window_width, window_height))
+
+	local cameras = camera.get_cameras()
+	if #cameras == 0 then
+		return
+	end
+	render.set_camera(cameras[#cameras], {use_frustum = true})
+
+	render.enable_state(graphics.STATE_CULL_FACE)
+	render.set_cull_face(graphics.FACE_TYPE_BACK)
+	render.set_depth_func(graphics.COMPARE_FUNC_LEQUAL)
+	for _, pass in ipairs(self.passes) do
+		set_state(pass.state)
+		render.draw(pass.predicate)
+	end
+	render.set_depth_mask(true)
+	render.clear({[graphics.BUFFER_TYPE_DEPTH_BIT] = 1})
+	-- The HUD panel is a fixed overlay at (0,0,-10): clear the world camera (so set_view /
+	-- set_projection take effect) and draw it with a fixed camera at the origin, so its
+	-- coplanar decals never jitter or sort-flicker while the world camera scrolls.
+	render.set_camera()
+	render.set_view(vmath.matrix4())
+	render.set_projection(self.hud_projection)
+	for _, pass in ipairs(self.hud_passes) do
+		set_state(pass.state)
+		render.draw(pass.predicate)
+	end
+	render.set_depth_mask(false)
+	render.disable_state(graphics.STATE_DEPTH_TEST)
+	render.disable_state(graphics.STATE_CULL_FACE)
+	render.set_camera()
+
+	-- GUI in window pixels (the engine has already fitted the nodes into the game box).
+	render.set_viewport(0, 0, window_width, window_height)
+	render.set_view(vmath.matrix4())
+	render.set_projection(vmath.matrix4_orthographic(0, window_width, 0, window_height, -1, 1))
+	render.enable_state(graphics.STATE_BLEND)
+	render.set_blend_func(graphics.BLEND_FACTOR_SRC_ALPHA, graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+	render.enable_state(graphics.STATE_STENCIL_TEST)
+	render.draw(self.gui_predicate)
+	render.draw(self.text_predicate)
+	render.disable_state(graphics.STATE_STENCIL_TEST)
+	render.disable_state(graphics.STATE_BLEND)
+end

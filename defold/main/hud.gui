@@ -1,0 +1,17 @@
+script: "/main/hud.gui_script"
+textures {
+  name: "hud"
+  texture: "/assets/hud/hud.atlas"
+}
+layers {
+  name: "base"
+}
+layers {
+  name: "text"
+}
+layers {
+  name: "top"
+}
+material: "/builtins/materials/gui.material"
+adjust_reference: ADJUST_REFERENCE_PARENT
+max_nodes: 4096

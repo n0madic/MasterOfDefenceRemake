@@ -54,7 +54,7 @@ help: ## Show this help
 	@echo "           DATA_DIR=$(DATA_DIR) BUILD_DIR=$(BUILD_DIR) WEB_PORT=$(WEB_PORT)"
 
 # --- Data pipeline (original assets -> Godot) ----------------------------------------------
-.PHONY: data assets import reimport pipeline
+.PHONY: data assets import reimport pipeline defold defold-run
 data: ## Export tables, paths and texts from the unpacked original to godot/data
 	$(PYTHON) tools/export_godot_data.py $(DATA_DIR) $(PROJECT)/data
 
@@ -70,6 +70,12 @@ reimport: ## Drop the import cache and import everything again (after changing a
 
 pipeline: data assets import ## Full pipeline: data + assets + import
 
+defold: ## Export Location1 + entities for the Defold port (defold/, needs godot/assets and data)
+	$(PYTHON) defold/tools/export_defold.py --location 1
+
+defold-run: defold ## Build the Defold port with bob and run it (ARGS="--config=main.demo=1")
+	defold/tools/bob.sh run $(ARGS)
+
 # --- Icons ---------------------------------------------------------------------------------
 ICON_PNG := $(PROJECT)/icons/icon_1024.png
 ICON_PNGS := $(addprefix $(PROJECT)/icons/,icon_256.png android_main_192.png android_fg_432.png android_bg_432.png android_mono_432.png ios_app_store_1024.png)
@@ -84,14 +90,18 @@ $(ICON_PNGS): $(ICON_PNG) $(PROJECT)/tools/make_icons.gd
 	$(GODOT_HEADLESS) -s res://tools/make_icons.gd
 
 # --- Tests and running ---------------------------------------------------------------------
-.PHONY: test test-godot test-tools run
-test: test-godot test-tools ## Run all tests
+.PHONY: test test-godot test-tools test-sim run
+test: test-godot test-tools test-sim ## Run all tests
 
 test-godot: ## Headless GDScript tests (TEST_FILTER=test_towers to narrow)
 	$(GODOT_HEADLESS) -s res://tests/run_tests.gd $(if $(TEST_FILTER),-- --filter=$(TEST_FILTER))
 
 test-tools: ## Python tests of the conversion tools
 	$(PYTHON) -m unittest discover -s tools/tests -v
+
+test-sim: ## Headless tests of the Defold port's Lua simulation (needs lua and godot/data)
+	@command -v lua >/dev/null || { echo "lua not found: skipping test-sim"; exit 0; }
+	lua defold/tests/run_sim_tests.lua
 
 run: ## Run the game on the desktop (ARGS="--location=1 --debug")
 	$(GODOT) --path $(PROJECT) $(if $(ARGS),-- $(ARGS))

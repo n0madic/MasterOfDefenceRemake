@@ -1,0 +1,611 @@
+-- The in-game screen: runs the simulation on the fixed tick, mirrors it into 3D views,
+-- drives the HUD snapshot and turns input into simulation intents (`_fgamelogic` key
+-- handling, `_fhandlegui`, `_fplacetower`, picking).
+local state = require("main.state")
+local Ticker = require("main.ticker")
+local picking = require("main.picking")
+local screen = require("main.screen")
+local views = require("main.views")
+local hud = require("main.hud_model")
+local level = require("generated.level_data")
+local data = require("sim.data")
+local Game = require("sim.game")
+local text_layout = require("main.blitz_text")
+
+-- The tower base ground of the location; generated/main.collection sets the exported one.
+go.property("ground_texture", resource.texture("/assets/textures/Towers/dno1.png"))
+
+local CAMERA = "camera"
+local CAMERA_COMPONENT = "camera#camera"
+local SOUNDS = "sounds"
+local BOX_W, BOX_H = 800, 600
+local PANEL_OFFSET = vmath.vector3(0, 0, -10)  -- Blitz MoveEntity(env, 0, 0, 10)
+local WORKER_PORTRAIT_FRAME = 30.99
+local PREVIEW_TOWER_TYPES = {data.TOWER_ICEROCK, data.TOWER_FLAME}
+local KEY_BUILD = {[hash("key_1")] = 1, [hash("key_2")] = 2, [hash("key_3")] = 3, [hash("key_4")] = 4, [hash("key_5")] = 5}
+
+local function play_sound(name)
+	local ok = pcall(sound.play, SOUNDS .. "#" .. name)
+	if not ok then
+		print("no sound " .. name)
+	end
+end
+
+local function now_ms()
+	return socket.gettime() * 1000
+end
+
+-- --- setup --------------------------------------------------------------------------------
+
+local handle_event  -- defined with the simulation events below
+
+local function load_data()
+	local function read(path)
+		return assert(sys.load_resource(path), "missing " .. path)
+	end
+	return data.load(read, json.decode)
+end
+
+local function spawn_panel(self)
+	-- Fixed overlay at a fixed world position, drawn by a fixed HUD camera (render script),
+	-- so it never jitters or sort-flickers with the scrolling camera.
+	self.env = views.spawn("Env", PANEL_OFFSET, vmath.quat(), 1)
+	for _, group in ipairs({"window", "updates"}) do
+		if self.env.meta.groups[group] then
+			msg.post(msg.url(nil, self.env.id, group), "disable")
+		end
+	end
+	self.faces = views.spawn("faces", PANEL_OFFSET, vmath.quat(), 1)
+	views.set_enabled(self.faces, false)
+end
+
+-- `--config=main.demo=1` (or `?demo=1` on the web): a scripted defense for checking the
+-- views without input -- towers by the path, health bars on, upgrades whenever affordable.
+local function demo_requested()
+	if sys.get_config_int("main.demo", 0) == 1 then
+		return true
+	end
+	if html5 then
+		return html5.run("window.location.search.indexOf('demo=1') >= 0 ? '1' : '0'") == "1"
+	end
+	return false
+end
+
+-- `--config=main.demo_ticks=N` (`?ticks=N` on the web): simulate N ticks before the
+-- first frame, so a screenshot shows a raid in progress.
+local function demo_ticks()
+	local n = sys.get_config_int("main.demo_ticks", 0)
+	if n == 0 and html5 then
+		n = tonumber(html5.run("(window.location.search.match(/ticks=(\\d+)/) || [0, '0'])[1]")) or 0
+	end
+	return n
+end
+
+local function start_demo(self)
+	local game = self.game
+	local keys = state.data.paths[level.location].pos
+	game.gold = 400
+	game.show_units_life = true
+	self.demo = true
+	local first
+	for i = 6, 18, 3 do
+		local k = keys[i]
+		first = first or game:build_tower(data.TOWER_LAND, {x = k.x + 4, y = 0, z = k.z + 4})
+		game:build_tower(data.TOWER_PLANT, {x = k.x - 4, y = 0, z = k.z - 4})
+	end
+	game:build_tower(data.TOWER_MAGIC, {x = keys[9].x, y = 0, z = keys[9].z + 5})
+	-- A level-10 Land tower next to the level-0 one: its guns differ per level, which shows
+	-- whether the animation cursor seeks the skinned model.
+	game:build_tower(data.TOWER_LAND, {x = keys[9].x + 10, y = 0, z = keys[9].z + 5}, 10)
+	-- A level-10 Plant tower: it is posed by `bone_matrices` (manual skinning), so a clean
+	-- shape here proves the sheared-model path holds up at maximum upgrades.
+	game:build_tower(data.TOWER_PLANT, {x = keys[9].x + 10, y = 0, z = keys[9].z - 6}, 10)
+	-- A level-5 Magic tower: its crown ring is a Blitz billboard (`B3D_BB_1_`) that only
+	-- shows at the top levels; it must hover centred over the tower top.
+	local gold = game.gold
+	game.gold = math.huge  -- a showcase tower, paid for outside the demo's economy
+	game:build_tower(data.TOWER_MAGIC, {x = keys[9].x - 6, y = 0, z = keys[9].z - 3}, 5)
+	game.gold = gold
+	if first then
+		game:select_tower(first)
+	end
+	msg.post(CAMERA, "move_to", {x = keys[9].x, z = keys[9].z})
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	state.data = load_data()
+	self.game = Game.new(state.data, os.time())
+	state.game = self.game
+	self.game:start_campaign(0, level.location)
+	self.ticker = Ticker.new()
+	self.enemy_views, self.tower_views, self.bullet_views, self.one_shots = {}, {}, {}, {}
+	self.messages, self.popups = {}, {}
+	self.placing = nil          -- {type, marker}
+	self.skills_open = false
+	self.end_screen = nil
+	self.preview_anim_time = 0
+	self.mouse = vmath.vector3(BOX_W / 2, BOX_H / 2, 0)
+	self.pressed_widget = nil
+	self.help_enabled = true
+	spawn_panel(self)
+	play_sound(level.music:gsub("%.ogg$", ""))
+	if demo_requested() then
+		start_demo(self)
+		local n = demo_ticks()
+		if n > 0 then
+			-- Simulate without views, then mirror the surviving objects (spawning and
+			-- deleting hundreds of objects in one frame would overflow the component pools).
+			for _ = 1, n do
+				self.game:tick()
+			end
+			for _, ev in ipairs(self.game:take_events()) do
+				if ev.type == "location_completed" or ev.type == "game_over" then
+					handle_event(self, ev)
+				end
+			end
+			for _, t in ipairs(self.game.towers) do
+				handle_event(self, {type = "tower_built", tower = t})
+			end
+			for _, e in ipairs(self.game.enemies) do
+				handle_event(self, {type = "enemy_spawned", enemy = e})
+			end
+			for _, b in ipairs(self.game.bullets) do
+				handle_event(self, {type = "bullet_created", bullet = b})
+			end
+		end
+		if sys.get_config_int("main.demo_skills", 0) == 1 or (html5 and html5.run("window.location.search.indexOf('skills=1') >= 0 ? '1' : '0'") == "1") then
+			self.open_skills_at_start = true
+		end
+	end
+end
+
+-- --- simulation events --------------------------------------------------------------------
+
+local function cancel_placing(self)
+	if self.placing then
+		views.marker_delete(self.placing.marker)
+		self.placing = nil
+	end
+end
+
+local function add_message(self, text, kind, duration_ms)
+	self.messages[#self.messages + 1] = {text = text, color = hud.MSG_COLORS[kind] or hud.COLOR_WHITE, scale = 0.9, spacing = 7,
+		lines = text_layout.line_count(text), alpha = 1, end_ms = now_ms() + duration_ms, x = hud.MESSAGE_X, y = hud.MESSAGE_Y}
+	if kind == Game.MSG_RED then
+		play_sound("warning")
+	end
+end
+
+-- The views are keyed by the simulation object itself: `_fdeleteenemy` / `_fdeletebullet`
+-- clear the object's `id` right after emitting the event, and the events are drained
+-- after the tick loop, so the id is no longer a usable key here.
+handle_event = function(self, ev)
+	local game = self.game
+	if ev.type == "enemy_spawned" then
+		self.enemy_views[ev.enemy] = views.enemy_create(ev.enemy, state.data:unit(ev.enemy.unit_id), level.shadows)
+	elseif ev.type == "enemy_died" then
+		local v = self.enemy_views[ev.enemy]
+		if v then
+			self.enemy_views[ev.enemy] = nil
+			views.enemy_delete(v)
+		end
+		if ev.killed then
+			self.one_shots[#self.one_shots + 1] = views.one_shot(views.DEATH_MODEL, views.vec(ev.enemy.path.body), 1, views.ONE_SHOT_SPEED, views.DEATH_FADE_FRAMES)
+		end
+	elseif ev.type == "tower_built" then
+		self.tower_views[ev.tower] = views.tower_create(ev.tower, self.ground_texture, level.tower_tint, level.location)
+	elseif ev.type == "tower_removed" then
+		local v = self.tower_views[ev.tower]
+		if v then
+			self.tower_views[ev.tower] = nil
+			views.tower_delete(v)
+		end
+	elseif ev.type == "bullet_created" then
+		self.bullet_views[ev.bullet] = views.bullet_create(ev.bullet)
+	elseif ev.type == "bullet_removed" then
+		local v = self.bullet_views[ev.bullet]
+		if v then
+			self.bullet_views[ev.bullet] = nil
+			views.bullet_delete(v)
+		end
+		local t = ev.bullet.tower
+		if ev.exploded and t and t.type ~= data.TOWER_FLAME then
+			local s = math.max(views.EXPLOSION_MIN_SCALE, t.level / math.max(t.max_upgrades, 1) * views.EXPLOSION_SCALE_FACTOR)
+			self.one_shots[#self.one_shots + 1] = views.one_shot(views.effect_key(t.type), views.vec(ev.bullet.position), s, views.ONE_SHOT_SPEED)
+		end
+	elseif ev.type == "sound" then
+		play_sound(ev.name)
+	elseif ev.type == "message" then
+		add_message(self, ev.text, ev.kind, ev.duration_ms)
+	elseif ev.type == "gold_popup" then
+		self.popups[#self.popups + 1] = {text = "+" .. ev.amount, color = hud.COLOR_GOLD, scale = 0.9, spacing = 5,
+			world = views.vec(ev.position), rise = 0, alpha = 1, end_ms = now_ms() + hud.GOLD_POPUP_MS, x = 0, y = 0}
+	elseif ev.type == "location_completed" then
+		cancel_placing(self)
+		self.end_screen = {text = {text = "Congratulations!\nThe village is safe.", x = 400, y = 260, color = hud.COLOR_EXP_TITLE, scale = 1, spacing = 5, cx = true}}
+		play_sound("congr")
+	elseif ev.type == "game_over" then
+		cancel_placing(self)
+		self.end_screen = {text = {text = "Game over", x = 400, y = 260, color = {1, 0, 0}, scale = 1.2, spacing = 5, cx = true}}
+		play_sound("gameover")
+	end
+end
+
+-- --- per frame ----------------------------------------------------------------------------
+
+local toggle_skills  -- defined with the intents below
+
+local function project(self, world)
+	local view = camera.get_view(CAMERA_COMPONENT)
+	local proj = camera.get_projection(CAMERA_COMPONENT)
+	local p = proj * view * vmath.vector4(world.x, world.y, world.z, 1)
+	if p.w <= 0 then
+		return nil
+	end
+	return (p.x / p.w + 1) / 2 * BOX_W, (1 - p.y / p.w) / 2 * BOX_H
+end
+
+local function camera_ray(self, x, y)
+	return picking.ray(go.get_position(CAMERA), go.get_rotation(CAMERA), x, BOX_H - y, BOX_W, BOX_H)
+end
+
+-- `_fplacetower`: the marker follows the cursor, zone rules + distance rule decide the colour.
+local function sync_placement(self)
+	local placing = self.placing
+	if not placing then
+		return
+	end
+	local o, d = camera_ray(self, self.mouse.x, self.mouse.y)
+	local zone, point = picking.pick_zone(level.zones, o, d)
+	if not zone then
+		views.marker_set(placing.marker, nil, false)
+		placing.can_place = false
+		return
+	end
+	local pos = vmath.vector3(point.x, Game.PLACE_MARKER_Y, point.z)
+	local proto = self.game.protos[placing.type][0]
+	local zone_ok = (zone == "grass" and not proto.place_on_road) or (zone == "road" and proto.place_on_road)
+	local allowed = zone_ok and not self.game:is_too_close_to_tower({x = pos.x, y = pos.y, z = pos.z})
+	placing.can_place = allowed
+	placing.position = pos
+	views.marker_set(placing.marker, pos, allowed)
+end
+
+local function sync_views(self, ticks)
+	local game = self.game
+	local cam_rot = go.get_rotation(CAMERA)
+	for _, v in pairs(self.enemy_views) do
+		views.enemy_sync(v, cam_rot, game.show_units_life, level.gradient, ticks)
+	end
+	-- `_fupdateextanims`: the shared texture of a tower type scrolls with its first tower;
+	-- Icerock / Flame follow the hidden level-0 preview tower's idle loop.
+	self.preview_anim_time = (self.preview_anim_time + Game.ANIM_SPEED * ticks) % Game.SEQ_FRAMES
+	local uv_driver = {}
+	for _, type_id in ipairs(PREVIEW_TOWER_TYPES) do
+		uv_driver[type_id] = self.preview_anim_time
+	end
+	for _, t in ipairs(game.towers) do
+		if not uv_driver[t.type] then
+			uv_driver[t.type] = Game.tower_model_frame(t)
+		end
+	end
+	for _, v in pairs(self.tower_views) do
+		views.tower_sync(v, uv_driver[v.tower.type], ticks)
+	end
+	for _, v in pairs(self.bullet_views) do
+		views.bullet_sync(v)
+	end
+	for i = #self.one_shots, 1, -1 do
+		if views.one_shot_tick(self.one_shots[i], ticks) then
+			table.remove(self.one_shots, i)
+		end
+	end
+	sync_placement(self)
+	-- Portrait of the selected monster.
+	local e = game.selected_enemy
+	views.set_enabled(self.faces, e ~= nil and not self.skills_open)
+	if e then
+		local frame = e.worker and WORKER_PORTRAIT_FRAME or (e.unit_id - 1)
+		views.seek(self.faces, frame)
+		views.animmaps(self.faces, frame)
+	end
+end
+
+local function sync_hud(self, ticks)
+	local t = now_ms()
+	hud.layout_messages(self.messages, ticks, t)
+	for i = #self.popups, 1, -1 do
+		local p = self.popups[i]
+		p.rise = p.rise + hud.GOLD_POPUP_RISE * ticks
+		if t >= p.end_ms then
+			p.alpha = p.alpha - hud.MESSAGE_FADE * ticks
+		end
+		local x, y = project(self, p.world)
+		if x then
+			p.x, p.y, p.hidden = x, y - p.rise, false
+		else
+			p.hidden = true
+		end
+		if p.alpha <= 0 then
+			table.remove(self.popups, i)
+		end
+	end
+	local visible_popups = {}
+	for _, p in ipairs(self.popups) do
+		if not p.hidden then
+			visible_popups[#visible_popups + 1] = p
+		end
+	end
+	local hovered = hud.widget_at(self.mouse.x, self.mouse.y)
+	state.hover = hovered and hovered.name or nil
+	hud.build(self.game, {
+		skills_open = self.skills_open, ticker = self.ticker, messages = self.messages, popups = visible_popups,
+		mouse = self.mouse, hover = state.hover, pressed = self.pressed_widget ~= nil, end_screen = self.end_screen,
+		help_enabled = self.help_enabled,
+	})
+end
+
+function update(self, dt)
+	if self.open_skills_at_start then
+		self.open_skills_at_start = nil
+		toggle_skills(self, true)
+	end
+	if self.demo and self.game.gold > 100 then
+		for _, t in ipairs(self.game.towers) do
+			if t.level < t.max_upgrades and not Game.tower_is_upgrading(t) and not t.upgrade_pending then
+				self.game:select_tower(t)
+				if self.game:upgrade_selected_tower() then
+					break
+				end
+			end
+		end
+	end
+	local ticks = 0
+	if not self.skills_open and not self.end_screen then
+		ticks = self.ticker:advance(dt)
+		for _ = 1, ticks do
+			self.game:tick()
+		end
+	end
+	for _, ev in ipairs(self.game:take_events()) do
+		handle_event(self, ev)
+	end
+	sync_views(self, ticks)
+	sync_hud(self, ticks)
+end
+
+-- --- intents ------------------------------------------------------------------------------
+
+-- `_fbuildtower`: enter placement mode for tower `type_id`.
+local function start_placing(self, type_id)
+	play_sound("click")
+	local game = self.game
+	if (type_id == data.TOWER_ICEROCK and game.skills.cold_magic == 0) or (type_id == data.TOWER_FLAME and game.skills.fire_magic == 0) then
+		return
+	end
+	cancel_placing(self)
+	if not game:can_afford_tower(type_id) then
+		play_sound("oops2")
+		return
+	end
+	self.placing = {type = type_id, marker = views.marker_create(type_id, game.protos[type_id][0].range), can_place = false}
+end
+
+toggle_skills = function(self, open)
+	local game = self.game
+	if open and game.location < 2 and not hud.SKILLS_ON_LOCATION_1 then
+		return
+	end
+	if open == self.skills_open then
+		return
+	end
+	play_sound("click")
+	cancel_placing(self)
+	self.skills_open = open
+	if self.env.meta.groups.updates then
+		msg.post(msg.url(nil, self.env.id, "updates"), open and "enable" or "disable")
+	end
+	for _, v in pairs(self.enemy_views) do
+		views.enemy_set_hidden(v, open)
+	end
+end
+
+local function skill_operation(self, id, downgrade)
+	local game = self.game
+	id = game.skills:button_id(id, downgrade)
+	if downgrade then
+		if game.skills:can_downgrade(id) then
+			game.skills:operate(game, id, true)
+			play_sound("click")
+		end
+	elseif game.skills:can_buy(id, game.experience) then
+		game.skills:operate(game, id, false)
+		play_sound("feature")
+	elseif game.experience < game.skills:price_of(id) then
+		play_sound("oops2")
+	end
+end
+
+local function restart(self)
+	cancel_placing(self)
+	toggle_skills(self, false)
+	for _, v in pairs(self.enemy_views) do views.enemy_delete(v) end
+	for _, v in pairs(self.tower_views) do views.tower_delete(v) end
+	for _, v in pairs(self.bullet_views) do views.bullet_delete(v) end
+	for _, s in ipairs(self.one_shots) do views.delete(s.obj) end
+	self.enemy_views, self.tower_views, self.bullet_views, self.one_shots = {}, {}, {}, {}
+	self.messages, self.popups = {}, {}
+	self.game = Game.new(state.data, os.time())
+	state.game = self.game
+	self.game:start_campaign(0, level.location)
+	self.end_screen = nil
+	self.ticker:set_slider(Ticker.DEFAULT_SLIDER)
+end
+
+local function widget_activated(self, w)
+	local game = self.game
+	local name = w.name
+	if name:sub(1, 5) == "tower" then
+		start_placing(self, tonumber(name:sub(6)))
+	elseif name == "upgrade" then
+		play_sound("click")
+		game:upgrade_selected_tower()
+	elseif name == "sell" then
+		play_sound("click")
+		game:sell_selected_tower()
+	elseif name == "health" then
+		play_sound("click")
+		game.show_units_life = not game.show_units_life
+	elseif name == "skills" then
+		toggle_skills(self, not self.skills_open)
+	elseif name == "stop" then
+		play_sound("click")
+		if game.selected_tower then
+			game.selected_tower.stopped = not game.selected_tower.stopped
+		end
+	elseif name == "reset" then
+		self.ticker:set_slider(Ticker.DEFAULT_SLIDER)
+	elseif name == "skills_ok" then
+		game.skills:commit()
+		toggle_skills(self, false)
+	elseif name == "skills_cancel" then
+		game.skills:cancel(game)
+		toggle_skills(self, false)
+	elseif name == "restart" then
+		play_sound("click")
+		restart(self)
+	elseif w.skill then
+		skill_operation(self, w.skill, w.downgrade)
+	end
+end
+
+local function slider_from_mouse(self)
+	local s = hud.SLIDER
+	local frac = (self.mouse.x - s.x - s.edge) / (s.w - 2 * s.edge)
+	self.ticker:set_slider(math.floor(math.max(0, math.min(1, frac)) * Ticker.SLIDER_MAX + 0.5))
+end
+
+local function map_left_click(self)
+	local game = self.game
+	if self.placing then
+		sync_placement(self)
+		if self.placing.can_place and self.placing.position then
+			local p = self.placing.position
+			local t = game:build_tower(self.placing.type, {x = p.x, y = p.y, z = p.z})
+			if t then
+				cancel_placing(self)
+				game:select_tower(t)
+			end
+		end
+		return
+	end
+	local o, d = camera_ray(self, self.mouse.x, self.mouse.y)
+	local t = picking.pick_tower(game.towers, o, d)
+	if t then
+		if not t.selected then
+			game:select_tower(t)
+		end
+		return
+	end
+	local e = picking.pick_enemy(game.enemies, o, d)
+	if e then
+		game:select_enemy(e)
+	end
+end
+
+local function map_right_click(self)
+	if self.placing then
+		cancel_placing(self)
+		return
+	end
+	self.game:deselect_all_towers()
+	self.game:deselect_enemy()
+end
+
+function on_input(self, action_id, action)
+	if action.x then
+		self.mouse.x, self.mouse.y = screen.mouse(action)
+	end
+	local game = self.game
+	if action_id == nil then
+		if self.pressed_widget and self.pressed_widget.kind == "slider" then
+			slider_from_mouse(self)
+		end
+		return
+	end
+	if action_id == hash("click") then
+		local w = hud.widget_at(self.mouse.x, self.mouse.y)
+		if action.pressed then
+			if w then
+				self.pressed_widget = w
+				if w.kind == "slider" then
+					slider_from_mouse(self)
+				end
+			elseif not self.skills_open and not self.end_screen then
+				map_left_click(self)
+			end
+		elseif action.released then
+			local pressed = self.pressed_widget
+			self.pressed_widget = nil
+			if pressed and w == pressed and w.kind ~= "slider" and not w.disabled then
+				widget_activated(self, w)
+			end
+		end
+		return
+	end
+	if action_id == hash("rclick") and action.pressed then
+		if not self.skills_open and not self.end_screen and not hud.widget_at(self.mouse.x, self.mouse.y) then
+			map_right_click(self)
+		end
+		return
+	end
+	if not action.pressed then
+		return
+	end
+	if action_id == hash("quit") then
+		if self.skills_open then
+			toggle_skills(self, false)
+		elseif self.placing then
+			cancel_placing(self)
+		else
+			sys.exit(0)
+		end
+		return
+	end
+	if self.skills_open then
+		if action_id == hash("key_e") or action_id == hash("key_f2") then
+			toggle_skills(self, false)
+		end
+		return
+	end
+	if self.end_screen then
+		if action_id == hash("key_enter") then
+			restart(self)
+		end
+		return
+	end
+	local build = KEY_BUILD[action_id]
+	if build then
+		start_placing(self, build)
+	elseif action_id == hash("key_u") or action_id == hash("key_r") then
+		play_sound("click")
+		game:upgrade_selected_tower()
+	elseif action_id == hash("key_tab") then
+		local t = game:next_tower()
+		if t then
+			msg.post(CAMERA, "move_to", {x = t.position.x, z = t.position.z})
+		end
+	elseif action_id == hash("key_space") then
+		game.show_units_life = not game.show_units_life
+	elseif action_id == hash("key_n") then
+		self.ticker:set_slider(Ticker.DEFAULT_SLIDER)
+	elseif action_id == hash("key_m") then
+		self.ticker:set_slider(Ticker.FAST_SLIDER)
+	elseif action_id == hash("key_e") or action_id == hash("key_f2") then
+		toggle_skills(self, true)
+	elseif action_id == hash("key_delete") then
+		play_sound("click")
+		game:sell_selected_tower()
+	end
+end

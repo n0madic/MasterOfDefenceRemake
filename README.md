@@ -20,6 +20,7 @@ included in this repository.
 | [`docs/`](docs/README.md) | Reverse-engineering notes on the original game: data formats, game rules, UI, HUD geometry, notes for the remake |
 | [`tools/`](tools/README.md) | Python pipeline: decompilation helpers, and the converters that turn the original's data/models/textures into Godot assets |
 | [`godot/`](godot/README.md) | The remake itself (GDScript project) — simulation, scenes, HUD, tests |
+| [`defold/`](defold/README.md) | Experiment: the first location playable in Defold (Lua simulation + views, exported from the Godot assets) |
 | `Makefile` | All the day-to-day commands (data pipeline, tests, running, platform exports) — run `make help` |
 
 ## Status

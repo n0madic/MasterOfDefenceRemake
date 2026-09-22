@@ -6,3 +6,10 @@ __pycache__
 godot/assets/
 reference/
 build/
+defold/assets/
+defold/generated/
+defold/data/
+defold/build/
+defold/.internal/
+defold/.editor_settings
+defold/debug.keystore*

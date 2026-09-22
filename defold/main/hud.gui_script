@@ -1,0 +1,184 @@
+-- Draws the HUD snapshot of main/hud_model.lua (`state.ui`) with box nodes from the
+-- gui.png atlas: buttons in their three states, the Blitz 16x16 glyph font, the time
+-- slider, the upgrade progress bar, messages, gold popups, tooltips and the skills panel.
+-- The gui owns no logic: hovering, clicks and texts come from the level script.
+local state = require("main.state")
+local text_layout = require("main.blitz_text")
+
+local BOX_H = 600
+local TEXTURE = "hud"
+local STYLE_NAMES = {[0] = "big", [1] = "s1", [2] = "s2"}
+local LAYER_BASE, LAYER_TEXT, LAYER_TOP = "base", "text", "top"
+
+local function box(x, y, w, h, image, layer)
+	local node = gui.new_box_node(vmath.vector3(x, BOX_H - y, 0), vmath.vector3(w, h, 0))
+	gui.set_pivot(node, gui.PIVOT_NW)
+	gui.set_texture(node, TEXTURE)
+	gui.play_flipbook(node, image)
+	gui.set_layer(node, layer or LAYER_BASE)
+	return node
+end
+
+local function place(node, x, y, w, h)
+	gui.set_position(node, vmath.vector3(x, BOX_H - y, 0))
+	if w then
+		gui.set_size(node, vmath.vector3(w, h, 0))
+	end
+end
+
+-- --- texts: one node per glyph -----------------------------------------------------------
+
+local function text_key(spec)
+	return table.concat({spec.text, spec.scale, spec.spacing, tostring(spec.cx), tostring(spec.cy)}, "|")
+end
+
+local function text_delete(obj)
+	if obj then
+		for _, n in ipairs(obj.nodes) do
+			gui.delete_node(n)
+		end
+	end
+end
+
+-- Create or update the glyph nodes of a text; returns the object to keep.
+local function text_sync(obj, spec, layer)
+	local key = text_key(spec)
+	if not obj or obj.key ~= key then
+		text_delete(obj)
+		obj = {key = key, nodes = {}, layout = text_layout.layout(spec.text, spec.scale, spec.spacing, spec.cx, spec.cy)}
+		for _, g in ipairs(obj.layout.glyphs) do
+			obj.nodes[#obj.nodes + 1] = box(0, 0, obj.layout.size, obj.layout.size, "g" .. g.code, layer or LAYER_TEXT)
+		end
+	end
+	local c = spec.color
+	local a = spec.alpha or 1
+	for i, g in ipairs(obj.layout.glyphs) do
+		local n = obj.nodes[i]
+		place(n, spec.x + g.x, spec.y + g.y)
+		gui.set_color(n, vmath.vector4(c[1] * g.r, c[2] * g.g, c[3] * g.b, a))
+	end
+	return obj
+end
+
+-- --- widgets ----------------------------------------------------------------------------
+
+local function button_image(w, hovered, pressed)
+	local st = 0
+	if hovered and not w.disabled then
+		st = pressed and 2 or 1
+	end
+	return string.format("btn_%s_%d_%d", STYLE_NAMES[w.style], w.icon, st)
+end
+
+function init(self)
+	self.buttons = {}   -- name -> node
+	self.texts = {}     -- key -> text object
+	self.messages = {}  -- message table -> text object
+	self.popups = {}
+	self.skill_texts = {}
+	self.slider_track = box(0, 0, 1, 1, "slider_track")
+	gui.set_slice9(self.slider_track, vmath.vector4(7, 0, 7, 0))
+	self.slider_knob = box(0, 0, 32, 32, "slider_knob")
+	self.progress_frame = box(0, 0, 1, 1, "progress_frame")
+	gui.set_slice9(self.progress_frame, vmath.vector4(8, 8, 8, 8))
+	self.progress_fill = box(0, 0, 1, 1, "progress_fill")
+	self.help_frame = box(0, 0, 1, 1, "frame", LAYER_TEXT)
+	gui.set_slice9(self.help_frame, vmath.vector4(6, 6, 6, 6))
+	gui.set_enabled(self.help_frame, false)
+	self.tooltip_frame = box(0, 0, 1, 1, "frame", LAYER_TOP)
+	gui.set_slice9(self.tooltip_frame, vmath.vector4(6, 6, 6, 6))
+	gui.set_enabled(self.tooltip_frame, false)
+	self.end_frame = box(0, 0, 1, 1, "frame", LAYER_TOP)
+	gui.set_slice9(self.end_frame, vmath.vector4(6, 6, 6, 6))
+	gui.set_enabled(self.end_frame, false)
+end
+
+-- Keyed by the spec table (persistent messages / popups) or, with `by_index`, by position
+-- for lists `hud.build` rebuilds every frame, so their glyph nodes are reused.
+local function sync_list(self, store, specs, layer, by_index)
+	local seen = {}
+	for i, spec in ipairs(specs or {}) do
+		local key = by_index and i or spec
+		store[key] = text_sync(store[key], spec, layer)
+		seen[key] = true
+	end
+	for key, obj in pairs(store) do
+		if not seen[key] then
+			text_delete(obj)
+			store[key] = nil
+		end
+	end
+end
+
+local function sync_optional(self, key, spec, layer)
+	if spec then
+		self.texts[key] = text_sync(self.texts[key], spec, layer)
+	elseif self.texts[key] then
+		text_delete(self.texts[key])
+		self.texts[key] = nil
+	end
+end
+
+function update(self, dt)
+	local ui = state.ui
+	if not ui.widgets then
+		return
+	end
+	local hud = require("main.hud_model")
+	-- Buttons.
+	for _, w in ipairs(ui.widgets) do
+		if w.kind == "button" then
+			local node = self.buttons[w.name]
+			if not node then
+				node = box(w.x, w.y, w.w, w.h, button_image(w, false, false), w.end_screen and LAYER_TOP or LAYER_BASE)
+				self.buttons[w.name] = node
+			end
+			gui.set_enabled(node, w.visible)
+			if w.visible then
+				place(node, w.x, w.y, w.w, w.h)
+				gui.play_flipbook(node, button_image(w, ui.hover == w.name, ui.pressed))
+				local m = w.modulate or {1, 1, 1}
+				gui.set_color(node, vmath.vector4(m[1], m[2], m[3], 1))
+			end
+		end
+	end
+	-- Slider and progress bar.
+	local s = hud.SLIDER
+	place(self.slider_track, s.x, s.y, s.w, s.h)
+	local knob_x = s.x + s.edge + (ui.slider or 0) * (s.w - 2 * s.edge) - 16
+	place(self.slider_knob, knob_x, s.y - 6)
+	local p = hud.PROGRESS
+	place(self.progress_frame, p.x, p.y, p.w, p.h)
+	local fill = (p.w - 16) * math.max(0, math.min(100, ui.progress or 0)) / 100
+	gui.set_enabled(self.progress_fill, fill > 0)
+	place(self.progress_fill, p.x + 8, p.y + 3, math.max(fill, 1), p.h - 6)
+	-- Texts.
+	for key, spec in pairs(ui.texts or {}) do
+		self.texts[key] = text_sync(self.texts[key], spec)
+	end
+	sync_list(self, self.messages, ui.messages)
+	sync_list(self, self.popups, ui.popups)
+	-- Skills panel.
+	sync_list(self, self.skill_texts, ui.skills_open and ui.skill_texts or nil, nil, true)
+	sync_optional(self, "skills_exp", ui.skills_open and ui.skills_exp or nil)
+	local help = ui.skills_open and ui.help or nil
+	gui.set_enabled(self.help_frame, help ~= nil)
+	if help then
+		place(self.help_frame, help.frame.x, help.frame.y, help.frame.w, help.frame.h)
+	end
+	sync_optional(self, "help", help and help.text or nil)
+	-- Tooltip.
+	local tip = ui.tooltip
+	gui.set_enabled(self.tooltip_frame, tip ~= nil)
+	if tip then
+		place(self.tooltip_frame, tip.frame.x, tip.frame.y, tip.frame.w, tip.frame.h)
+	end
+	sync_optional(self, "tooltip", tip and tip.text or nil, LAYER_TOP)
+	-- End of the location.
+	local es = ui.end_screen
+	gui.set_enabled(self.end_frame, es ~= nil)
+	if es then
+		place(self.end_frame, 200, 220, 400, 180)
+	end
+	sync_optional(self, "end_screen", es and es.text or nil, LAYER_TOP)
+end
