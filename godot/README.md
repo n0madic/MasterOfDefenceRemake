@@ -39,9 +39,15 @@ On phones the renderer is Mobile (Vulkan). The Vulkan emulator doesn't display a
 Vulkan queue"), so the `Android Emulator` preset (`make android-emulator`,
 `build/android/MasterOfDefense-emulator.apk`) passes `--rendering-method gl_compatibility`.
 Mobile has no depth pre-pass, which the alpha-textured brushes (menu posts and planks, HUD sheets,
-road patches) relied on: `b3d_post_import.gd` gives them `DEPTH_DRAW_ALWAYS`, otherwise
-the posts get sorted over the planks. Compatibility renders lit faces noticeably brighter (Location1's
-roofs) — Mobile matches Forward+, so this is a discrepancy in Compatibility itself.
+road patches, tower bases) relied on: `b3d_post_import.gd` gives them a second, alpha-scissored
+pass (`solid_pass`, `next_pass` of the material) that writes the depth of their solid texels on
+every renderer, otherwise the posts get sorted over the planks. (Writing depth from the blended pass
+itself — `DEPTH_DRAW_ALWAYS` — cut holes into the blended rocks of Location6 under a tower base: the
+transparent corners of the quad occluded the rock top whenever the base sorted farther than the
+rock.) Runtime changes to such a material go through `BlitzAnimator` (`copy_material`,
+`set_material_color/texture/uv_offset`) so both passes stay in step. Compatibility renders lit faces
+noticeably brighter (Location1's roofs) — Mobile matches Forward+, so this is a discrepancy in
+Compatibility itself.
 
 The icon — `icons/icon_1024.png`: a render of a level-10 Military tower (`tools/render_icon.gd`), just like
 the original `Data/td.ico`.

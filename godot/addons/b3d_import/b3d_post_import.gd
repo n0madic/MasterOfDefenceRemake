@@ -32,6 +32,9 @@ const TEX_BLEND_ALPHA := 1
 const TEX_BLEND_MULTIPLY := 2
 const TEX_BLEND_MULTIPLY2 := 5
 const MAX_LAYERS := 2
+## Alpha from which a texel of an alpha-textured brush counts as solid and writes depth
+## (`solid_pass`); the same threshold Forward+'s depth pre-pass uses for such materials.
+const SOLID_ALPHA := 0.99
 
 ## Shader objects by variant key so identical materials share the compiled code.
 var shaders: Dictionary = {}
@@ -102,16 +105,21 @@ func _walk(node: Node, materials: Dictionary, nodes: Dictionary, fixed: Dictiona
 						own = _sphere_material(mat, mat_info, base_dir, negative_order, info.get("billboard", false), positive_order)
 					else:
 						var sm := (mat as StandardMaterial3D).duplicate() as StandardMaterial3D
+						if sm.next_pass != null:
+							sm.next_pass = sm.next_pass.duplicate()
 						if negative_order:
 							# Negative orders go to the transparent pass without the depth test.
 							# Location zones (Location6 `noparking` has order -1) keep the
 							# depth test so towers and enemies stay in front of the ground.
 							sm.no_depth_test = true
 							sm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+							sm.next_pass = null  # nothing to occlude without a depth test
 							if sm.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED:
 								sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 						if info.get("billboard", false):
 							sm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+							if sm.next_pass is StandardMaterial3D:
+								(sm.next_pass as StandardMaterial3D).billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 						own = sm
 					if info.has("order"):
 						own.render_priority = clampi(-int(info["order"]), RENDER_PRIORITY_MIN, RENDER_PRIORITY_MAX)
@@ -151,15 +159,26 @@ func _fix_material(sm: StandardMaterial3D, info: Dictionary, base_dir: String) -
 		sm.albedo_color = Color(sm.albedo_color.r * 2.0, sm.albedo_color.g * 2.0, sm.albedo_color.b * 2.0, sm.albedo_color.a)
 	if int(info.get("fx", 0)) & 1:
 		sm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	if sm.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS and blend == 1 and sm.albedo_color.a >= 1.0:
-		# Alpha-textured brushes with a plain blend (planks and posts of the menu sign, the
-		# HUD sheets, road patches): the glTF importer gives them a depth pre-pass so they
-		# occlude each other, but the Mobile renderer has no pre-pass and sorts them by
-		# centre only (the posts came out over the planks). Writing depth in the colour
-		# pass too keeps the occlusion on every renderer.
-		sm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_ALWAYS
 	sm.set_meta("blitz_blend", blend)
 	sm.set_meta("blitz_fx", int(info.get("fx", 0)))
+	if sm.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS and blend == 1 and sm.albedo_color.a >= 1.0:
+		sm.next_pass = solid_pass(sm)
+
+
+## Alpha-textured brushes with a plain blend (planks and posts of the menu sign, the HUD
+## sheets, road patches, tower bases) rely on the depth pre-pass to occlude each other, but
+## the Mobile renderer has none and sorts them by centre only (the posts came out over the
+## planks). An extra opaque pass with an alpha scissor writes the depth of the solid texels
+## on every renderer, the blended pass on top keeps the soft edges. Writing depth from the
+## blended pass itself (`DEPTH_DRAW_ALWAYS`) is wrong: its transparent texels cut holes into
+## blended geometry behind the quad (Location6's rocks under a tower base).
+static func solid_pass(sm: StandardMaterial3D) -> StandardMaterial3D:
+	var solid := sm.duplicate() as StandardMaterial3D
+	solid.resource_name = sm.resource_name + " solid"
+	solid.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+	solid.alpha_scissor_threshold = SOLID_ALPHA
+	solid.next_pass = null
+	return solid
 
 
 ## Blitz clamps U and V separately (texture flags 16 / 32); StandardMaterial3D cannot, so

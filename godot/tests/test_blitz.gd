@@ -57,3 +57,32 @@ func test_random_seeded() -> void:
 		check(v >= 1 and v <= 30, "rand range")
 		var f := a.rnd(-1.0, 1.0)
 		check(f >= -1.0 and f <= 1.0, "rnd range")
+
+
+## Alpha-textured brushes carry a second, alpha-scissored pass (`next_pass`) that writes the
+## depth of their solid texels; per-instance copies and every runtime change must reach it.
+func _two_pass_material() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.next_pass = StandardMaterial3D.new()
+	return m
+
+
+func test_copy_material_copies_the_solid_pass() -> void:
+	var m := _two_pass_material()
+	var own := BlitzAnimator.copy_material(m) as StandardMaterial3D
+	check(own != m and own.next_pass != null, "copied with a solid pass")
+	check(own.next_pass != m.next_pass, "the solid pass is not shared with the source")
+	var plain := BlitzAnimator.copy_material(StandardMaterial3D.new()) as StandardMaterial3D
+	check(plain.next_pass == null, "no solid pass invented")
+
+
+func test_material_setters_reach_the_solid_pass() -> void:
+	var m := _two_pass_material()
+	var solid := m.next_pass as StandardMaterial3D
+	var tex := PlaceholderTexture2D.new()
+	BlitzAnimator.set_material_color(m, Color(0.2, 0.4, 0.6, 0.5))
+	BlitzAnimator.set_material_texture(m, tex)
+	BlitzAnimator.set_material_uv_offset(m, Vector3(0.25, -0.5, 0))
+	check_eq(solid.albedo_color, Color(0.2, 0.4, 0.6, 0.5), "colour and alpha")
+	check(solid.albedo_texture == tex, "texture")
+	check_eq(solid.uv1_offset, Vector3(0.25, -0.5, 0), "uv offset")

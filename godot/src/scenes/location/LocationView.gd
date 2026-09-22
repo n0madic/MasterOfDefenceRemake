@@ -245,7 +245,7 @@ func _atlas_for(node_name: String, texture_path: String, fw: int, fh: int) -> Uv
 	var m := mi.get_active_material(0)
 	if not BlitzAnimator._is_blitz_material(m):
 		return null
-	var own := m.duplicate() as Material
+	var own := BlitzAnimator.copy_material(m)
 	mi.set_surface_override_material(0, own)
 	return UvAtlasAnimator.new(own, load(texture_path), fw, fh)
 

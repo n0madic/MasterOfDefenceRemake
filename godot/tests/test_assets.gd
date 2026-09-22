@@ -250,3 +250,21 @@ func test_blitz_text_skips_unchanged_text() -> void:
 	t.text = "gold: 100"
 	check_eq(t._glyphs.size(), glyphs + 1, "a new text is parsed")
 	t.free()
+
+
+## The importer's `solid_pass`: the alpha-textured tower base writes depth for its solid
+## texels only (a scissored second pass), never from the blended pass itself, which cut
+## holes into Location6's rocks under a tower.
+func test_alpha_textured_brushes_get_a_scissored_solid_pass() -> void:
+	var root := _load_scene("res://assets/models/Towers/Military.glb")
+	check(root != null, "Military.glb")
+	if root == null:
+		return
+	var dno := root.find_child("dno", true, false) as MeshInstance3D
+	var m := dno.get_active_material(0) as StandardMaterial3D
+	check(m != null and m.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY, "blended pass writes no depth")
+	var solid := m.next_pass as StandardMaterial3D
+	check(solid != null and solid.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR, "scissored solid pass")
+	check(solid != null and solid.next_pass == null, "single extra pass")
+	check_near(solid.alpha_scissor_threshold if solid != null else 0.0, 0.99, 0.001, "solid threshold")
+	root.free()

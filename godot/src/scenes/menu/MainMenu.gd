@@ -152,8 +152,8 @@ func _setup_titul() -> void:
 	if ResourceLoader.exists(path):
 		var m := titul.get_active_material(0)
 		if m is StandardMaterial3D:
-			var own := (m as StandardMaterial3D).duplicate() as StandardMaterial3D
-			own.albedo_texture = load(path)
+			var own := BlitzAnimator.copy_material(m)
+			BlitzAnimator.set_material_texture(own, load(path))
 			titul.set_surface_override_material(0, own)
 
 

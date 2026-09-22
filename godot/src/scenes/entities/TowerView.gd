@@ -63,11 +63,11 @@ static func paint_base(model: Node3D, type: int, location: Dictionary, location_
 	for i in dno.mesh.get_surface_count():
 		var m := dno.get_active_material(i)
 		if m is StandardMaterial3D:
-			var own := (m as StandardMaterial3D).duplicate() as StandardMaterial3D
+			var own := BlitzAnimator.copy_material(m) as StandardMaterial3D
 			if ResourceLoader.exists(tex_path):
-				own.albedo_texture = load(tex_path)
+				BlitzAnimator.set_material_texture(own, load(tex_path))
 				own.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			own.albedo_color = Color(tint.r, tint.g, tint.b, own.albedo_color.a)
+			BlitzAnimator.set_material_color(own, Color(tint.r, tint.g, tint.b, own.albedo_color.a))
 			dno.set_surface_override_material(i, own)
 			out.append(own)
 	return out

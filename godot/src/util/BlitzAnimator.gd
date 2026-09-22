@@ -88,9 +88,22 @@ static func material_color(m: Material) -> Color:
 	return Color.WHITE
 
 
+## The importer gives alpha-textured brushes a second, alpha-scissored pass that writes the
+## depth of their solid texels (`b3d_post_import.gd` `solid_pass`); every change to the
+## brush state is applied to both passes so the solid pass never shows through with a
+## stale colour, alpha, texture or scroll.
+static func _solid_pass(m: Material) -> StandardMaterial3D:
+	if m is StandardMaterial3D:
+		return (m as StandardMaterial3D).next_pass as StandardMaterial3D
+	return null
+
+
 static func set_material_color(m: Material, c: Color) -> void:
 	if m is StandardMaterial3D:
 		(m as StandardMaterial3D).albedo_color = c
+		var solid := _solid_pass(m)
+		if solid != null:
+			solid.albedo_color = c
 	elif m is ShaderMaterial:
 		(m as ShaderMaterial).set_shader_parameter("albedo", c)
 
@@ -98,6 +111,9 @@ static func set_material_color(m: Material, c: Color) -> void:
 static func set_material_uv_offset(m: Material, offset: Vector3) -> void:
 	if m is StandardMaterial3D:
 		(m as StandardMaterial3D).uv1_offset = offset
+		var solid := _solid_pass(m)
+		if solid != null:
+			solid.uv1_offset = offset
 	elif m is ShaderMaterial:
 		(m as ShaderMaterial).set_shader_parameter("uv1_offset", offset)
 
@@ -106,6 +122,9 @@ static func set_material_uv_offset(m: Material, offset: Vector3) -> void:
 static func set_material_texture(m: Material, texture: Texture2D) -> void:
 	if m is StandardMaterial3D:
 		(m as StandardMaterial3D).albedo_texture = texture
+		var solid := _solid_pass(m)
+		if solid != null:
+			solid.albedo_texture = texture
 	elif m is ShaderMaterial:
 		(m as ShaderMaterial).set_shader_parameter("layer0", texture)
 
@@ -114,11 +133,21 @@ static func _is_blitz_material(m: Material) -> bool:
 	return m is StandardMaterial3D or m is ShaderMaterial
 
 
+## Copy of a Blitz material for per-instance changes; the solid pass is copied with it
+## (`Resource.duplicate` would keep sharing it with every other instance).
+static func copy_material(m: Material) -> Material:
+	var own := m.duplicate() as Material
+	var solid := _solid_pass(own)
+	if solid != null:
+		(own as StandardMaterial3D).next_pass = solid.duplicate()
+	return own
+
+
 ## Per-instance copy of surface `i` of `mi` (made once, marked "owned").
 static func owned_material(mi: MeshInstance3D, i: int) -> Material:
 	var own := mi.get_surface_override_material(i)
 	if own == null or not own.has_meta("owned"):
-		own = mi.get_active_material(i).duplicate()
+		own = copy_material(mi.get_active_material(i))
 		own.set_meta("owned", true)
 		mi.set_surface_override_material(i, own)
 	return own
