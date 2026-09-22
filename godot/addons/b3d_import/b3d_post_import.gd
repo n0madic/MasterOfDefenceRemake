@@ -71,6 +71,11 @@ func _walk(node: Node, materials: Dictionary, nodes: Dictionary, fixed: Dictiona
 		node.set_meta("blitz_animbrush_material", str(info["animbrush_material"]))
 	if node is MeshInstance3D:
 		var mi := node as MeshInstance3D
+		# Blitz draws transparent models back to front by the distance from the camera to
+		# the entity's origin (world.cpp `TransComp`), never by its bounds: Location6's rocks
+		# (origin far below the top) go before a tower base standing on them. Godot's
+		# default AABB centre would flip that order with the camera angle.
+		mi.sorting_use_aabb_center = false
 		var mesh := mi.mesh
 		if mesh != null:
 			var negative_order: bool = info.has("order") and int(info["order"]) < 0 and not node.name in ZONE_NODES

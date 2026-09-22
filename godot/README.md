@@ -236,6 +236,12 @@ settings — `user://settings.json`, high scores — `user://highscores.json`.
 - Directional light `B3DEXT_DIRLIGHT`: `_fext_initlight` does `CreateLight(parent)` +
   `TurnEntity 90,0,0`, i.e. the light points along the parent's local −Y (like B3D
   Extensions' camera) — `LocationView` sets up `DirectionalLight3D` with `MainMenu.CAMERA_FIX`.
+- Transparent surfaces: Blitz draws them after the opaque ones, back to front by the distance
+  from the camera to the entity's origin, with the z-test but no z-write (`world.cpp`
+  `TransComp`, `ZMODE_CMPONLY`). The importer sets `sorting_use_aabb_center = false` on every
+  mesh so Godot sorts by the same point: with the default AABB centre a Location6 rock (origin
+  far below its top) could sort nearer than the tower base standing on it, and the order flipped
+  with the camera angle.
 - The tower base `dno`: in the original `dno<L>.png` is loaded with the alpha flag, so
   `TowerView` always enables alpha blending (`Freeze.b3d` has its own untextured, opaque base brush).
 - `EntityOrder`: in Blitz, ordered entities are drawn without a z-buffer (positive orders

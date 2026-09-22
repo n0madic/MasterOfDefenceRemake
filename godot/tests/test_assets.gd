@@ -261,6 +261,7 @@ func test_alpha_textured_brushes_get_a_scissored_solid_pass() -> void:
 	if root == null:
 		return
 	var dno := root.find_child("dno", true, false) as MeshInstance3D
+	check(not dno.sorting_use_aabb_center, "transparent sorting by node origin (Blitz world.cpp TransComp)")
 	var m := dno.get_active_material(0) as StandardMaterial3D
 	check(m != null and m.depth_draw_mode == BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY, "blended pass writes no depth")
 	var solid := m.next_pass as StandardMaterial3D
