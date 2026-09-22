@@ -99,7 +99,11 @@ func _walk(node: Node, materials: Dictionary, nodes: Dictionary, fixed: Dictiona
 					# Per-node state: give the node its own copy of the material.
 					var own: Material
 					var positive_order: bool = info.has("order") and int(info["order"]) > 0
-					if mat is ShaderMaterial or positive_order:
+					# Billboards always take the generated shader: Godot's built-in
+					# BILLBOARD_ENABLED aligns to the camera *axes*, while Blitz's
+					# `_fext_updatebillboards` points the node at the camera *position* (the
+					# Magic crown ring, 3.44 units along its node's Z, slid off the tower top).
+					if mat is ShaderMaterial or positive_order or info.get("billboard", false):
 						# Blitz draws ordered entities with the z-buffer disabled (world.cpp
 						# `ZMODE_DISABLE`): positive orders before everything else, highest
 						# first (the stacked ground layers of the locations), negative orders
@@ -121,10 +125,6 @@ func _walk(node: Node, materials: Dictionary, nodes: Dictionary, fixed: Dictiona
 							sm.next_pass = null  # nothing to occlude without a depth test
 							if sm.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED:
 								sm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-						if info.get("billboard", false):
-							sm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-							if sm.next_pass is StandardMaterial3D:
-								(sm.next_pass as StandardMaterial3D).billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 						own = sm
 					if info.has("order"):
 						own.render_priority = clampi(-int(info["order"]), RENDER_PRIORITY_MIN, RENDER_PRIORITY_MAX)
@@ -292,8 +292,17 @@ func _sphere_shader_code(blend: int, fx: int, no_depth: bool, billboard: bool, c
 	code += "varying vec2 sphere_uv;\n"
 	code += "void vertex() {\n"
 	if billboard:
-		# Blitz `B3D_BB_1_` nodes face the camera; keep the node's scale.
-		code += "\tMODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0] * length(MODEL_MATRIX[0]), INV_VIEW_MATRIX[1] * length(MODEL_MATRIX[1]), INV_VIEW_MATRIX[2] * length(MODEL_MATRIX[2]), MODEL_MATRIX[3]);\n"
+		# Blitz `B3D_BB_1_` nodes: `_fext_updatebillboards` does PointEntity(node, camera) --
+		# the node's Blitz +Z (glTF -Z, the converter mirrors Z) points at the camera
+		# *position*, no roll, world Y up; the node's position and scale are kept. In view
+		# space the camera is the origin. Aligning to the camera axes instead is wrong under
+		# perspective: the Magic crown ring sits 3.44 units along the node's Z, so it slid
+		# sideways off the tower top instead of hovering over it.
+		code += "\tvec3 bb_o = (VIEW_MATRIX * vec4(MODEL_MATRIX[3].xyz, 1.0)).xyz;\n"
+		code += "\tvec3 bb_z = normalize(bb_o);\n"
+		code += "\tvec3 bb_x = normalize(cross((VIEW_MATRIX * vec4(0.0, 1.0, 0.0, 0.0)).xyz, bb_z));\n"
+		code += "\tvec3 bb_y = cross(bb_z, bb_x);\n"
+		code += "\tMODELVIEW_MATRIX = mat4(vec4(bb_x * length(MODEL_MATRIX[0].xyz), 0.0), vec4(bb_y * length(MODEL_MATRIX[1].xyz), 0.0), vec4(bb_z * length(MODEL_MATRIX[2].xyz), 0.0), vec4(bb_o, 1.0));\n"
 		code += "\tMODELVIEW_NORMAL_MATRIX = mat3(MODELVIEW_MATRIX);\n"
 	code += "\tvec3 n = normalize(MODELVIEW_NORMAL_MATRIX * NORMAL);\n"
 	code += "\tsphere_uv = vec2(0.5 + 0.5 * n.x, 0.5 - 0.5 * n.y);\n}\n"

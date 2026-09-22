@@ -178,9 +178,12 @@ func start_survival() -> void:
 
 
 ## Load location L and `_frestartlocation(0)`: clears every object, raid = first of L.
+## The balloon is dropped like `_funloadlocation` → `_fdeleteballoon` does, so the next
+## `enable_balloon` recreates it at the centre of the new location's rectangle.
 func enter_location(L: int) -> void:
 	location = L
 	path = data.paths[L]
+	balloon = null
 	restart_location()
 
 

@@ -2,7 +2,7 @@
 ## Menu -> Map -> Location -> Congratulations -> Map ... -> Final titles -> High scores,
 ## Game over -> restart location / menu, Survival -> Location 2 -> High scores.
 ##
-## Command line (after `--`): --location=L --seed=N --demo --demo-tower=T --shot=PATH:FRAMES --debug
+## Command line (after `--`): --location=L --seed=N --demo --demo-tower=T --demo-level=N --shot=PATH:FRAMES --debug
 ## --cheats --open-skills --tutorial-page=N --safe-area=L,T,R,B --hover=x,y --survival --hide=node,…
 ## --act=F:close --act=F:pivot:X,Z (debug shortcuts straight into a location).
 ## --cheats: inhabitants never die, gold and experience are never spent; the run is not scored.
@@ -41,6 +41,7 @@ func _ready() -> void:
 	var seed_value := 0
 	var demo := false
 	var demo_tower := GameData.TOWER_LAND
+	var demo_level := 0
 	var survival := false
 	for a in args:
 		if a.begins_with("--location="):
@@ -65,6 +66,9 @@ func _ready() -> void:
 		elif a.begins_with("--demo-tower="):  # tower type 1..5 built by --demo (default Land)
 			demo = true
 			demo_tower = int(a.substr("--demo-tower=".length()))
+		elif a.begins_with("--demo-level="):  # upgrade level of the --demo tower (built free of charge)
+			demo = true
+			demo_level = int(a.substr("--demo-level=".length()))
 		elif a == "--debug":
 			GameState.debug_mode = true
 		elif a == "--cheats":
@@ -100,7 +104,7 @@ func _ready() -> void:
 			var key := _demo_key(keys, game.data.location(maxi(L, 1))["bounds"])
 			if demo_tower == GameData.TOWER_FLAME:
 				game.skills.fire_magic = 1
-			var t := game.build_tower(demo_tower, key + (Vector3.ZERO if demo_tower == GameData.TOWER_FLAME else Vector3(6, 0, 0)))
+			var t := game.build_tower(demo_tower, key + (Vector3.ZERO if demo_tower == GameData.TOWER_FLAME else Vector3(6, 0, 0)), demo_level, demo_level == 0)
 			game.select_tower(t)
 			(current as LocationScreen).view.camera_rig.jump_to(key + Vector3(0, 0, CameraRig.LOOK_BACK))
 			game.ingame_time = SimGame.RAID_WAIT_TIME - 0.01

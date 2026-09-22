@@ -72,7 +72,8 @@ A series of gameplay screenshots: `--shot=PATH:FIRST-LAST/STEP` (a frame number 
 (jump straight to a location), `--seed=N` (random seed), `--survival`, `--demo` (a tower + start a raid), `--debug` (F1 — start a
 raid, F3 — overlay, F4 — gold/experience/magic, F6 — finish the location, F7 — defeat),
 `--cheats` (inhabitants never die, gold and experience are never spent, the run isn't scored),
-`--demo-tower=T` (tower type for `--demo`; Flame unlocks Fire Magic),
+`--demo-tower=T` (tower type for `--demo`; Flame unlocks Fire Magic), `--demo-level=N` (build that
+tower at upgrade level N, free of charge),
 `--shot=PATH:FRAMES` (screenshot and exit), `--act=FRAME:click:X,Y` / `--act=FRAME:key:NAME` / `--act=FRAME:close` (the window's close button), `--hide=node,…`
 (scripted input), `--act=FRAME:pivot:X,Z` (pan the location camera to a point, clamped to its bounds),
 `--hover=X,Y`, `--open-skills`, `--tutorial-page=N`, `--safe-area=L,T,R,B` (simulates a
@@ -91,7 +92,10 @@ settings — `user://settings.json`, high scores — `user://highscores.json`.
   convention C3), `Blitz` (not an autoload, a static class: `round_int`, `f32`, coordinates).
 - `addons/b3d_import/b3d_post_import.gd` — glb post-import: applies from the sidecar
   `*.b3d.json` whatever isn't in the glTF (ADD/MUL blending, vertex colors, lightmaps on UV2,
-  `TextureBlend 5` → albedo ×2, EntityOrder → render_priority, see "Deviations" — billboards).
+  `TextureBlend 5` → albedo ×2, EntityOrder → render_priority, see "Deviations"). Billboards
+  (`B3D_BB_1_`: the Magic crown ring, the Icerock glow) follow `_fext_updatebillboards` —
+  PointEntity toward the camera *position* (world Y up, no roll), not the camera axes: the
+  crown ring sits 3.44 units along its node's Z, so axis alignment slid it off the tower top.
   Brushes with spherical env-mapping (texture flag 64: tower glows, bullets,
   effects, the death "ghost"), every multi-layer brush (a second alpha layer masks the
   first: Location5's `noparking`, the `transp*` patches, lightmaps), and layers with a positive

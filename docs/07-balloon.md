@@ -5,6 +5,8 @@ Created once (`_fcreateballoon`): `Balloon.b3d` (child `balloon` animates
 at speed 0.03), shadow `shadow.b3d` (hidden on location 6), destination marker
 `here.b3d`, bomb model `military3.b3d`. Starting position — the center of the
 location's rectangle at height `_vballoony = 10` (persisted in the save).
+`_funloadlocation` deletes it when leaving locations 3–5 (`_fdeleteballoon`), so every
+location starts it at its own centre; `_frestartlocation` keeps it in place.
 
 ## Control [code: `_fhandleballoons`, `_fmoveballoonto`]
 
