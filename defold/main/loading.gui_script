@@ -1,0 +1,14 @@
+-- The "Loading..." plank of the original (`Loading.png`) on black, shown by the screen
+-- controller while a location is being loaded (the load stalls the frame).
+function init(self)
+	self.back = gui.get_node("back")
+	gui.set_enabled(self.back, false)
+end
+
+function on_message(self, message_id, message)
+	if message_id == hash("show") then
+		gui.set_enabled(self.back, true)
+	elseif message_id == hash("hide") then
+		gui.set_enabled(self.back, false)
+	end
+end

@@ -1,0 +1,734 @@
+-- The location screen: runs the simulation on the fixed tick, mirrors it into the 3D
+-- world (world.lua) and turns input into simulation intents (`_fgamelogic` key handling,
+-- `_fhandlegui`, `_fplacetower`, picking). The HUD (hud.gui_script) owns the input over its
+-- widgets and posts their activations here (`hud_action`); this script tells it what it
+-- needs to know (`hud_state`, messages, gold popups). The game itself is the session's
+-- (main/session.lua); leaving or restarting goes through the screen controller.
+local session = require("main.session")
+local messages = require("main.messages")
+local render_scene = require("main.render_scene")
+local Ticker = require("main.ticker")
+local picking = require("main.picking")
+local screen = require("main.screen")
+local tower_view = require("main.views.tower")
+local World = require("main.location.world")
+local demo = require("main.location.demo")
+local MenuScene = require("main.ui.menu_scene")
+local IngameMenu = require("main.location.ingame_menu")
+local Decor = require("main.location.decor")
+local camera_view = require("main.location.camera_view")
+local log = require("main.log")
+local Gesture = require("main.input.gesture")
+local Tutorial = require("sim.tutorial")
+local locations = require("generated.locations")
+local data = require("sim.data")
+local Game = require("sim.game")
+local profile = require("sim.profile")
+
+-- Set per location by generated/collections/location<N>.collection.
+go.property("location", 1)
+go.property("ground_texture", resource.texture("/assets/textures/Towers/dno1.png"))
+
+local CAMERA = "camera"
+local HUD = "hud#gui"
+local END_SHEET_SPEED = 0.4
+local SCORES_SHEET_SPEED = 0.6
+local SCORES_ITEMS = {"hs_restart", "hs_tomenu"}
+local SEND_PLANK = "hs_send"  -- the online submission is gone
+local SCORES_GUI = "hud#scores"
+local GAME_SAVED_TEXT = 58
+local BALLOON_ROAD_TEXT = 77  -- "To move baloon, click on the road."
+local MESSAGE_MS = 1500
+local KEY_BUILD = {[hash("key_1")] = 1, [hash("key_2")] = 2, [hash("key_3")] = 3, [hash("key_4")] = 4, [hash("key_5")] = 5}
+local CLICK, RCLICK, QUIT = hash("click"), hash("rclick"), hash("quit")
+local MSG_HUD_ACTION = hash("hud_action")
+-- Phones and tablets play the map with gestures (main/input/gesture.lua).
+local TOUCH_SYSTEMS = {Android = true, ["iPhone OS"] = true}
+local TOUCH = TOUCH_SYSTEMS[sys.get_sys_info().system_name] or false
+
+local function play_sound(name)
+	msg.post(messages.AUDIO, messages.PLAY_SOUND, {name = name})
+end
+
+-- --- HUD --------------------------------------------------------------------------------
+
+-- The tutorial's 3D sheet (`tutorial.b3d`, drawn after the panel): frame = page - 1 up to
+-- the monsters page; pages 8-10 keep it at frame 1.
+local TUTORIAL_SHEET_LAST_SEEK = 7
+
+local function sync_tutorial_sheet(self)
+	local page = self.tutorial:page()
+	self.tutorial_sheet:set_visible(page > 0)
+	if page > 0 then
+		self.tutorial_sheet:seek(page <= TUTORIAL_SHEET_LAST_SEEK and page - 1 or 1)
+	end
+end
+
+local function push_hud_state(self)
+	msg.post(HUD, "hud_state", {skills_open = self.skills_open, end_screen = self.end_screen ~= nil,
+		menu_open = self.ingame.open, tutorial_page = self.tutorial:page(), slider = self.ticker.slider})
+	sync_tutorial_sheet(self)
+end
+
+-- The game stands still under a sheet or window.
+local function frozen(self)
+	return self.skills_open or self.end_screen ~= nil or self.ingame.open
+end
+
+local function add_message(self, text, kind, duration_ms)
+	msg.post(HUD, "hud_message", {text = text, kind = kind, duration_ms = duration_ms})
+	if kind == Game.MSG_RED then
+		play_sound("warning")
+	end
+end
+
+local function set_slider(self, value)
+	self.ticker:set_slider(value)
+	push_hud_state(self)
+end
+
+-- --- placement --------------------------------------------------------------------------
+
+local function cancel_placing(self)
+	if self.placing then
+		tower_view.marker_delete(self.placing.marker)
+		self.placing = nil
+	end
+end
+
+-- The ray through the mouse (canvas coordinates, see main/screen.lua).
+local function camera_ray(self)
+	local m = self.canvas_mouse
+	return picking.ray(go.get_position(CAMERA), go.get_rotation(CAMERA), m.x, m.y, m.w, m.h)
+end
+
+-- `_fplacetower`: the marker follows the cursor, zone rules + distance rule decide the colour.
+local function sync_placement(self)
+	local placing = self.placing
+	if not placing then
+		return
+	end
+	local o, d = camera_ray(self)
+	local zone, point = picking.pick_zone(self.loc.zones, o, d)
+	if not zone then
+		tower_view.marker_set(placing.marker, nil, false)
+		placing.can_place = false
+		return
+	end
+	local pos = vmath.vector3(point.x, Game.PLACE_MARKER_Y, point.z)
+	local proto = self.game.protos[placing.type][0]
+	local zone_ok = (zone == "grass" and not proto.place_on_road) or (zone == "road" and proto.place_on_road)
+	local allowed = zone_ok and not self.game:is_too_close_to_tower({x = pos.x, y = pos.y, z = pos.z})
+	placing.can_place = allowed
+	placing.position = pos
+	tower_view.marker_set(placing.marker, pos, allowed)
+end
+
+-- `_fbuildtower`: enter placement mode for tower `type_id`.
+local function start_placing(self, type_id)
+	play_sound("click")
+	local game = self.game
+	if (type_id == data.TOWER_ICEROCK and game.skills.cold_magic == 0) or (type_id == data.TOWER_FLAME and game.skills.fire_magic == 0) then
+		return
+	end
+	cancel_placing(self)
+	if not game:can_afford_tower(type_id) then
+		play_sound("oops2")
+		return
+	end
+	self.placing = {type = type_id, marker = tower_view.marker_create(type_id, game.protos[type_id][0].range), can_place = false}
+	self.tutorial:on_build_button()
+	push_hud_state(self)
+end
+
+-- The upgrade / sell buttons and keys (`_fhandlegui`), which the tutorial follows.
+local function upgrade(self)
+	play_sound("click")
+	if self.game:upgrade_selected_tower() then
+		self.tutorial:on_upgrade_pressed()
+		push_hud_state(self)
+	end
+end
+
+local function sell(self)
+	play_sound("click")
+	if self.game:sell_selected_tower() then
+		self.tutorial:on_sell()
+		push_hud_state(self)
+	end
+end
+
+-- --- the skills window ------------------------------------------------------------------
+
+-- `_fshowupgradeswindow` / `_fhideupgradeswindow`: the original opens it from location 2
+-- on (and in survival).
+local function toggle_skills(self, open)
+	local game = self.game
+	if open and game.location < 2 and not game.survival_mode then
+		return
+	end
+	if open == self.skills_open then
+		return
+	end
+	play_sound("click")
+	cancel_placing(self)
+	self.skills_open = open
+	self.world:set_enemies_hidden(open)
+	self.world:set_skills_panel(open)
+	push_hud_state(self)
+end
+
+-- `_fshowingamemenu` / `_fhideingamemenu`: the monsters hide, the camera stops scrolling,
+-- the panel goes inert.
+local function set_menu_shown(self, shown)
+	if shown == self.ingame.open then
+		return
+	end
+	cancel_placing(self)
+	if shown then
+		self.ingame:show()
+	else
+		self.ingame:hide()
+	end
+	self.world:set_enemies_hidden(shown or self.skills_open)
+	msg.post(CAMERA, "scroll_enabled", {enabled = not shown})
+	push_hud_state(self)
+end
+
+-- The original writes the automatic save on the way out when no raid is on.
+local function save_on_leaving(self)
+	if profile.can_autosave(self.game) then
+		session.save_game(profile.SAVE_AUTOMATIC)
+	end
+end
+
+-- --- the end sheets ---------------------------------------------------------------------
+
+-- A sheet over the frozen location; `end_screen` = {won} or {score}.
+local function open_end_sheet(self, sheet, speed, end_screen)
+	cancel_placing(self)
+	end_screen.sheet = sheet
+	self.end_screen = end_screen
+	sheet:set_visible(true)
+	sheet:animate(MenuScene.ANIM_ONESHOT, speed)
+	push_hud_state(self)
+end
+
+-- `_fcreatecongratulationsmenu` / `_fcreategameovermenu`.
+local function show_end_sheet(self, won)
+	open_end_sheet(self, won and self.congr or self.gameover, END_SHEET_SPEED, {won = won})
+	play_sound(won and "congr" or "gameover")
+end
+
+-- Survival is over (lost, or left through the in-game menu): `_fcreatehighscoresmenu` hangs
+-- the score sheet with the raid reached over the location and stops the camera.
+local function end_survival(self)
+	local score = self.game.curlevel
+	session.add_highscore(true, score)
+	set_menu_shown(self, false)
+	msg.post(CAMERA, "scroll_enabled", {enabled = false})
+	open_end_sheet(self, self.scores, SCORES_SHEET_SPEED, {score = score})
+end
+
+-- A choice on the end sheet: on to the next location after a win; after a defeat back to
+-- the location's snapshot ("gorestart", "hs_restart") or to the menu ("gotomenu" clears
+-- the campaign's saves, "hs_tomenu").
+local function end_screen_done(self, choice)
+	if self.end_screen.leaving then
+		return
+	end
+	self.end_screen.leaving = true
+	if self.end_screen.won then
+		msg.post(messages.CONTROLLER, messages.NEXT_LOCATION)
+	elseif choice == "gotomenu" then
+		msg.post(messages.CONTROLLER, messages.LEAVE_TO_MENU)
+	elseif choice == "hs_tomenu" then
+		msg.post(messages.CONTROLLER, messages.SHOW_MENU)
+	else
+		msg.post(messages.CONTROLLER, messages.RESTART_LOCATION)
+	end
+end
+
+-- `_fhandleingamemenu`: a choice on the in-game menu.
+local function on_menu_choice(self, choice)
+	if choice == "back" then
+		self.ingame:save_volumes()
+		set_menu_shown(self, false)
+	elseif choice == "restart" then
+		msg.post(messages.CONTROLLER, messages.RESTART_LOCATION)
+	elseif choice == "tomenu" then
+		if self.game.survival_mode then
+			end_survival(self)
+		else
+			save_on_leaving(self)
+			msg.post(messages.CONTROLLER, messages.SHOW_MENU)
+		end
+	elseif choice == "exit" then
+		session.settings.ShowHelp = 0
+		self.ingame:save_volumes()
+		save_on_leaving(self)
+		msg.post(messages.CONTROLLER, messages.QUIT)
+	elseif choice == "help" then
+		set_menu_shown(self, false)
+		self.tutorial:start(Tutorial.PAGE_HELP)
+		push_hud_state(self)
+	end
+end
+
+local function skill_operation(self, id, downgrade)
+	local game = self.game
+	id = game.skills:button_id(id, downgrade)
+	if downgrade then
+		if game.skills:can_downgrade(id) then
+			game.skills:operate(game, id, true)
+			play_sound("click")
+		end
+	elseif game.skills:can_buy(id, game.experience) then
+		game.skills:operate(game, id, false)
+		play_sound("feature")
+	elseif game.experience < game.skills:price_of(id) then
+		play_sound("oops2")
+	end
+end
+
+-- --- simulation events ------------------------------------------------------------------
+
+local function handle_event(self, ev)
+	if self.world:on_event(ev) then
+		return
+	end
+	local kind = ev.type
+	if kind == "sound" then
+		play_sound(ev.name)
+	elseif kind == "autosave" then
+		session.save_game(profile.SAVE_AUTOMATIC, ev.save)
+	elseif kind == "message" then
+		add_message(self, ev.text, ev.kind, ev.duration_ms)
+	elseif kind == "gold_popup" then
+		local p = ev.position
+		msg.post(HUD, "hud_popup", {amount = ev.amount, x = p.x, y = p.y, z = p.z})
+	elseif kind == "tower_upgraded" then
+		self.tutorial:on_upgrade_finished()
+		push_hud_state(self)
+	elseif kind == "location_completed" then
+		show_end_sheet(self, true)
+	elseif kind == "game_over" then
+		if self.game.survival_mode then
+			-- Survival has no game over sheet: the score sheet follows at once.
+			end_survival(self)
+		else
+			show_end_sheet(self, false)
+		end
+	end
+end
+
+-- --- setup ------------------------------------------------------------------------------
+
+-- The render script draws with this scene's background and light; Wide mode stops where
+-- the camera's x range can no longer hide the location's edge.
+local function set_scene(loc)
+	render_scene.set({clear_color = loc.clear_color, light = loc.light,
+		max_aspect = camera_view.max_aspect(loc.bounds, screen.WIDE_MAX_ASPECT)})
+end
+
+-- The debug scenarios of main/location/demo.lua.
+local function start_demo(self)
+	if demo.requested() then
+		local key = demo.build(self.game, self.location)
+		self.demo = true
+		msg.post(CAMERA, "move_to", {x = key.x, z = key.z})
+	end
+	local n = demo.ticks()
+	if n > 0 then
+		-- Simulate without views, then mirror the surviving objects (spawning and deleting
+		-- hundreds of objects in one frame would overflow the component pools).
+		for _ = 1, n do
+			self.game:tick()
+		end
+		for _, ev in ipairs(self.game:take_events()) do
+			if ev.type == "location_completed" or ev.type == "game_over" then
+				handle_event(self, ev)
+			end
+		end
+		self.world:rebuild(self.game)
+	end
+	self.open_skills_at_start = demo.open_skills()
+	self.open_menu_at_start = demo.open_menu()
+	local pivot = demo.pivot()
+	if pivot then
+		local b, z = self.loc.bounds, pivot.z + camera_view.MOVE_TO_BEHIND
+		if pivot.x < b.x_min or pivot.x > b.x_max or z < b.z_min or z > b.z_max then
+			log.warn("demo", "pivot (%d, %d) is beyond the camera range x %g..%g, z %g..%g: the camera stops at its edge",
+				pivot.x, pivot.z, b.x_min, b.x_max, b.z_min - camera_view.MOVE_TO_BEHIND, b.z_max - camera_view.MOVE_TO_BEHIND)
+		end
+		msg.post(CAMERA, "move_to", pivot)
+	end
+end
+
+function init(self)
+	-- The HUD takes the input first: its focus is acquired after this script's.
+	msg.post(".", "acquire_input_focus")
+	msg.post("hud", "acquire_input_focus")
+	self.loc = assert(locations[self.location], "no location " .. tostring(self.location))
+	self.game = session.game
+	self.world = World.new(session.data, self.loc, self.ground_texture)
+	self.decor = Decor.new(self.loc)
+	self.ticker = Ticker.new()
+	-- The sheets over the location run at the normal speed while the game is frozen.
+	self.sheet_ticker = Ticker.new()
+	self.placing = nil          -- {type, marker, can_place, position}
+	self.skills_open = false
+	self.end_screen = nil       -- {sheet, won or score}: an end sheet is up
+	local sel = go.get_id("sel")
+	self.congr = MenuScene.new(go.get_id("congr"), "Menu/congr", {"cook"}, sel)
+	self.gameover = MenuScene.new(go.get_id("gameover"), "Menu/gameover", {"gorestart", "gotomenu"}, sel)
+	self.scores = MenuScene.new(go.get_id("scores"), "Menu/Send", SCORES_ITEMS, sel)
+	self.scores:set_node_visible(SEND_PLANK, false)
+	-- Without the "send" plank the remaining two are centred where the three were.
+	self.scores:center_nodes(SCORES_ITEMS)
+	for _, sheet in ipairs({self.congr, self.gameover, self.scores}) do
+		sheet:set_visible(false)
+	end
+	self.ingame = IngameMenu.new({menu = go.get_id("ingame"), music = go.get_id("ingame_music"),
+		sound = go.get_id("ingame_sound"), cursor = go.get_id("ingame_sel")})
+	-- The tutorial page of the location, when entered from the map (`_fhandlemapmenu`).
+	self.tutorial = Tutorial.new(self.game)
+	self.tutorial_sheet = MenuScene.new(go.get_id("tutorial"), "tutorial", {})
+	self.tutorial:start(session.tutorial_page)
+	session.tutorial_page = nil
+	self.mouse_held = false
+	self.gesture = Gesture.new()
+	self.mouse = vmath.vector3(screen.WIDTH / 2, screen.HEIGHT / 2, 0)  -- the 800x600 box (sheets, HUD)
+	self.canvas_mouse = {x = screen.WIDTH / 2, y = screen.HEIGHT / 2, w = screen.WIDTH, h = screen.HEIGHT}  -- the world canvas
+	msg.post(CAMERA, "setup", {bounds = self.loc.bounds})
+	set_scene(self.loc)
+	msg.post(messages.AUDIO, messages.PLAY_MUSIC, {name = self.loc.music})
+	push_hud_state(self)
+	start_demo(self)
+	if session.notice then
+		add_message(self, session.notice.text, session.notice.kind, session.notice.duration_ms)
+		session.notice = nil
+	end
+	msg.post(messages.CONTROLLER, messages.SCREEN_READY)
+end
+
+-- --- per frame --------------------------------------------------------------------------
+
+function update(self, dt)
+	if self.end_screen and demo.auto_advance() then
+		end_screen_done(self, "gorestart")
+	end
+	if self.open_skills_at_start then
+		self.open_skills_at_start = nil
+		toggle_skills(self, true)
+	end
+	if self.open_menu_at_start then
+		self.open_menu_at_start = nil
+		set_menu_shown(self, true)
+	end
+	if self.demo then
+		demo.upgrade(self.game)
+	end
+	local ticks = 0
+	if not frozen(self) then
+		ticks = self.ticker:advance(dt)
+		for _ = 1, ticks do
+			self.tutorial:tick()
+			self.game:tick()
+		end
+	end
+	for _, ev in ipairs(self.game:take_events()) do
+		handle_event(self, ev)
+	end
+	self.world:sync(self.game, ticks, go.get_rotation(CAMERA))
+	self.decor:sync(ticks, go.get_position(CAMERA))
+	sync_placement(self)
+	for _ = 1, self.sheet_ticker:advance(dt) do
+		local end_screen = self.end_screen
+		if end_screen and end_screen.sheet then
+			end_screen.sheet:tick(self.mouse.x, self.mouse.y)
+			if end_screen.score and not end_screen.texts_shown and not end_screen.sheet:animating() then
+				-- `_fhandlehighscoressendmenu` draws the texts once the sheet has flown in.
+				end_screen.texts_shown = true
+				msg.post(SCORES_GUI, "scores", {score = end_screen.score})
+			end
+		end
+		self.ingame:tick(self.mouse.x, self.mouse.y, self.mouse_held)
+	end
+end
+
+-- --- intents ----------------------------------------------------------------------------
+
+-- F5 (`_fmainloop`) or the panel's Save button: the quick save, with the "Game saved"
+-- message.
+local function quick_save(self, from_button)
+	if profile.can_quick_save(self.game, from_button) then
+		msg.post(messages.CONTROLLER, messages.QUICK_SAVE)
+		add_message(self, self.game.data:text(GAME_SAVED_TEXT), Game.MSG_WHITE, MESSAGE_MS)
+	end
+end
+
+-- F9 (`_fmainloop`) or the panel's Load button.
+local function quick_load(self, from_button)
+	if profile.can_quick_load(self.game, from_button) then
+		msg.post(messages.CONTROLLER, messages.QUICK_LOAD)
+	end
+end
+
+-- `_fhandlegui`: a HUD widget was activated.
+local function on_hud_action(self, action)
+	local game = self.game
+	local name = action.name
+	if name:sub(1, 5) == "tower" then
+		start_placing(self, tonumber(name:sub(6)))
+	elseif name == "upgrade" then
+		upgrade(self)
+	elseif name == "sell" then
+		sell(self)
+	elseif name == "health" then
+		play_sound("click")
+		game.show_units_life = not game.show_units_life
+	elseif name == "skills" then
+		toggle_skills(self, not self.skills_open)
+	elseif name == "stop" then
+		play_sound("click")
+		if game.selected_tower then
+			game.selected_tower.stopped = not game.selected_tower.stopped
+		end
+	elseif name == "slider" then
+		set_slider(self, action.value)
+	elseif name == "reset" then
+		set_slider(self, Ticker.DEFAULT_SLIDER)
+	elseif name == "skills_ok" then
+		game.skills:commit()
+		toggle_skills(self, false)
+	elseif name == "skills_cancel" then
+		game.skills:cancel(game)
+		toggle_skills(self, false)
+	elseif name == "menu" then
+		play_sound("click")
+		set_menu_shown(self, true)
+	elseif name == "balloon" then
+		play_sound("click")
+		local p = game.balloon.position
+		msg.post(CAMERA, "move_to", {x = p.x, z = p.z})
+	elseif name == "tutorial_next" then
+		play_sound("click")
+		if self.tutorial:next() == "open_skills" then
+			toggle_skills(self, true)
+		end
+		push_hud_state(self)
+	elseif name == "tutorial_skip" then
+		-- The checkbox is kept in the settings; ticking it ends the running tutorial.
+		play_sound("check")
+		local skip = session.settings.TutorialDisable == 0
+		session.settings.TutorialDisable = skip and 1 or 0
+		session.save_settings()
+		if skip then
+			self.tutorial:disable()
+		end
+		push_hud_state(self)
+	elseif name == "save" then
+		play_sound("click")
+		quick_save(self, true)
+	elseif name == "load" then
+		play_sound("click")
+		quick_load(self, true)
+	elseif action.skill then
+		skill_operation(self, action.skill, action.downgrade)
+	end
+end
+
+function final(self)
+	msg.post(messages.AUDIO, messages.STOP_LOOPS)
+end
+
+function on_message(self, message_id, message)
+	if message_id == MSG_HUD_ACTION then
+		on_hud_action(self, message)
+	end
+end
+
+local function map_left_click(self)
+	local game = self.game
+	if self.placing then
+		sync_placement(self)
+		if self.placing.can_place and self.placing.position then
+			local p = self.placing.position
+			local t = game:build_tower(self.placing.type, {x = p.x, y = p.y, z = p.z})
+			if t then
+				cancel_placing(self)
+				game:select_tower(t)
+				self.tutorial:on_tower_placed()
+				push_hud_state(self)
+			end
+		end
+		return
+	end
+	local o, d = camera_ray(self)
+	local t = picking.pick_tower(game.towers, o, d)
+	if t then
+		if not t.selected then
+			game:select_tower(t)
+		end
+		return
+	end
+	local e = picking.pick_enemy(game.enemies, o, d)
+	if e then
+		game:select_enemy(e)
+	end
+end
+
+-- `_fhandleballoons`: the right click on the road sends the balloon there.
+local function send_balloon(self)
+	local game = self.game
+	if not (game.balloon and game.balloon.enabled) then
+		return
+	end
+	local o, d = camera_ray(self)
+	local zone, point = picking.pick_zone(self.loc.zones, o, d)
+	if zone == "road" then
+		game:move_balloon({x = point.x, y = point.y, z = point.z})
+	else
+		add_message(self, game.data:text(BALLOON_ROAD_TEXT), Game.MSG_WHITE, MESSAGE_MS)
+	end
+end
+
+local function map_right_click(self)
+	if self.placing then
+		cancel_placing(self)
+		return
+	end
+	self.game:deselect_all_towers()
+	self.game:deselect_enemy()
+	send_balloon(self)
+end
+
+-- `back` (Esc): closes the menu or the skills window, cancels the placement, else opens
+-- the in-game menu.
+local function back(self)
+	if self.ingame.open then
+		on_menu_choice(self, "back")
+	elseif self.skills_open then
+		toggle_skills(self, false)
+	elseif self.placing then
+		cancel_placing(self)
+	elseif not self.end_screen then
+		set_menu_shown(self, true)
+	end
+end
+
+local function on_key(self, action_id)
+	local game = self.game
+	if action_id == QUIT then
+		back(self)
+		return
+	end
+	if self.ingame.open then
+		return
+	end
+	if self.skills_open then
+		if action_id == hash("key_e") or action_id == hash("key_f2") then
+			toggle_skills(self, false)
+		end
+		return
+	end
+	if self.end_screen then
+		return
+	end
+	local build = KEY_BUILD[action_id]
+	if build then
+		start_placing(self, build)
+	elseif action_id == hash("key_u") or action_id == hash("key_r") then
+		upgrade(self)
+	elseif action_id == hash("key_tab") then
+		local t = game:next_tower()
+		if t then
+			msg.post(CAMERA, "move_to", {x = t.position.x, z = t.position.z})
+		end
+	elseif action_id == hash("key_space") then
+		game.show_units_life = not game.show_units_life
+	elseif action_id == hash("key_n") then
+		set_slider(self, Ticker.DEFAULT_SLIDER)
+	elseif action_id == hash("key_m") then
+		set_slider(self, Ticker.FAST_SLIDER)
+	elseif action_id == hash("key_e") or action_id == hash("key_f2") then
+		toggle_skills(self, true)
+	elseif action_id == hash("key_delete") then
+		sell(self)
+	elseif action_id == hash("key_f5") then
+		quick_save(self, false)
+	elseif action_id == hash("key_f9") then
+		quick_load(self, false)
+	end
+end
+
+-- A left click (a tap) at the mouse.
+local function left_click(self)
+	if self.ingame.open then
+		local choice = self.ingame:click(self.mouse.x, self.mouse.y)
+		if choice then
+			on_menu_choice(self, choice)
+		end
+	elseif self.end_screen and self.end_screen.sheet then
+		local choice = self.end_screen.sheet:click(self.mouse.x, self.mouse.y)
+		if choice then
+			end_screen_done(self, choice)
+		end
+	elseif not frozen(self) then
+		map_left_click(self)
+	end
+end
+
+local function right_click(self)
+	if not frozen(self) then
+		map_right_click(self)
+	end
+end
+
+-- Touch: the map acts on the release (a drag pans the camera instead), a long press is
+-- the right click.
+local function on_touch(self, action)
+	local now = socket.gettime() * 1000
+	if action.pressed then
+		self.gesture:press(self.mouse.x, self.mouse.y, now)
+	elseif action.released then
+		local kind = self.gesture:release(now)
+		if kind == "tap" then
+			left_click(self)
+		elseif kind == "long_press" then
+			right_click(self)
+		end
+	else
+		local dx, dy = self.gesture:move(self.mouse.x, self.mouse.y)
+		if dx and not frozen(self) then
+			msg.post(CAMERA, "pan", {dx = dx, dy = dy})
+		end
+	end
+end
+
+-- The input the HUD left: the map and the keys.
+function on_input(self, action_id, action)
+	if action.x then
+		self.mouse.x, self.mouse.y = screen.mouse(action)
+		local m = self.canvas_mouse
+		m.x, m.y, m.w, m.h = screen.canvas_mouse(action)
+	end
+	if action_id == CLICK then
+		self.mouse_held = action.pressed or (self.mouse_held and not action.released)
+		if TOUCH then
+			on_touch(self, action)
+			return
+		end
+	end
+	if action_id == nil or not action.pressed then
+		return
+	end
+	if action_id == CLICK then
+		left_click(self)
+	elseif action_id == RCLICK then
+		right_click(self)
+	else
+		on_key(self, action_id)
+	end
+end

@@ -1,0 +1,28 @@
+name: "ending"
+instances {
+  id: "controller"
+  prototype: "/main/ending/ending.go"
+}
+instances {
+  id: "camera"
+  prototype: "/main/menu/camera.go"
+}
+instances {
+  id: "titles"
+  prototype: "/generated/go/Additional_end.go"
+  position {
+    x: 0.0
+    y: 0.0
+    z: -10.0
+  }
+}
+instances {
+  id: "scores"
+  prototype: "/generated/go/Menu_SendTD.go"
+  position {
+    x: 0.0
+    y: 0.0
+    z: -10.0
+  }
+}
+scale_along_z: 0

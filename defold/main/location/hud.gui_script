@@ -1,0 +1,312 @@
+-- The location HUD (docs/09, docs/13): the panel buttons in their three states, the Blitz
+-- 16x16 glyph font, the time slider, the upgrade progress bar, messages, gold popups,
+-- tooltips and the skills panel, drawn with box nodes from the gui.png atlas. It owns the
+-- input over its widgets (hover, press, the slider drag) and posts the widget activations
+-- to the location script (`hud_action`); what it shows is composed by hud_model.lua from
+-- the session's game and the location's state (`hud_state` messages).
+local session = require("main.session")
+local screen = require("main.screen")
+local glyph_text = require("main.ui.glyph_text")
+local hud = require("main.location.hud_model")
+local text_layout = require("main.blitz_text")
+local Ticker = require("main.ticker")
+
+local LOCATION = "controller#script"
+local CAMERA_COMPONENT = "camera#camera"
+local STYLE_NAMES = {[0] = "big", [1] = "s1", [2] = "s2"}
+local LAYER_BASE, LAYER_TEXT, LAYER_TOP = "base", "text", "top"
+local TICK_MS = 16
+local TUTORIAL_REVEAL_MIN, TUTORIAL_REVEAL_MAX = 0.01, 0.03  -- per-letter fade-in of a page
+
+local MSG_HUD_STATE = hash("hud_state")      -- {skills_open, end_screen, menu_open, tutorial_page, slider}
+local MSG_MESSAGE = hash("hud_message")      -- {text, kind, duration_ms}
+local MSG_POPUP = hash("hud_popup")          -- {amount, x, y, z}
+local CLICK, RCLICK = hash("click"), hash("rclick")
+
+local function box(x, y, w, h, image, layer)
+	return glyph_text.box(x, y, w, h, image, layer or LAYER_BASE)
+end
+
+local place = glyph_text.place
+local text_delete = glyph_text.delete
+
+local function text_sync(obj, spec, layer)
+	return glyph_text.sync(obj, spec, layer or LAYER_TEXT)
+end
+
+local function now_ms()
+	return socket.gettime() * 1000
+end
+
+local function button_image(w, hovered, pressed)
+	local st = 0
+	if hovered and not w.disabled then
+		st = pressed and 2 or 1
+	end
+	return string.format("btn_%s_%d_%d", STYLE_NAMES[w.style], w.icon, st)
+end
+
+function init(self)
+	self.buttons = {}   -- name -> node
+	self.button_state = {}  -- name -> what was last applied to its node
+	self.texts = {}     -- key -> text object
+	self.message_texts = {}
+	self.popup_texts = {}
+	self.skill_texts = {}
+	self.slider_track = box(0, 0, 1, 1, "slider_track")
+	gui.set_slice9(self.slider_track, vmath.vector4(7, 0, 7, 0))
+	self.slider_knob = box(0, 0, 32, 32, "slider_knob")
+	self.progress_frame = box(0, 0, 1, 1, "progress_frame")
+	gui.set_slice9(self.progress_frame, vmath.vector4(8, 8, 8, 8))
+	self.progress_fill = box(0, 0, 1, 1, "progress_fill")
+	self.help_frame = box(0, 0, 1, 1, "frame", LAYER_TEXT)
+	gui.set_slice9(self.help_frame, vmath.vector4(6, 6, 6, 6))
+	gui.set_enabled(self.help_frame, false)
+	self.tooltip_frame = box(0, 0, 1, 1, "frame", LAYER_TOP)
+	gui.set_slice9(self.tooltip_frame, vmath.vector4(6, 6, 6, 6))
+	gui.set_enabled(self.tooltip_frame, false)
+	-- What the location says about itself.
+	self.skills_open, self.end_screen, self.slider = false, false, 20
+	self.messages, self.popups = {}, {}
+	self.mouse = {x = screen.WIDTH / 2, y = screen.HEIGHT / 2}
+	self.pressed_widget = nil
+	self.last_ms = now_ms()
+end
+
+-- Keyed by the spec table (persistent messages / popups) or, with `by_index`, by position
+-- for lists `hud.build` rebuilds every frame, so their glyph nodes are reused.
+local function sync_list(store, specs, layer, by_index)
+	local seen = {}
+	for i, spec in ipairs(specs or {}) do
+		local key = by_index and i or spec
+		store[key] = text_sync(store[key], spec, layer)
+		seen[key] = true
+	end
+	for key, obj in pairs(store) do
+		if not seen[key] then
+			text_delete(obj)
+			store[key] = nil
+		end
+	end
+end
+
+local function sync_optional(self, key, spec, layer)
+	if spec then
+		self.texts[key] = text_sync(self.texts[key], spec, layer)
+	elseif self.texts[key] then
+		text_delete(self.texts[key])
+		self.texts[key] = nil
+	end
+end
+
+-- Box point of world point `p` seen by the location camera, or nil behind it.
+local function project(p)
+	local view = camera.get_view(CAMERA_COMPONENT)
+	local proj = camera.get_projection(CAMERA_COMPONENT)
+	local c = proj * view * vmath.vector4(p.x, p.y, p.z, 1)
+	if c.w <= 0 then
+		return nil
+	end
+	return screen.box_of_canvas_ndc(c.x / c.w, c.y / c.w)
+end
+
+-- Messages fade and stack; gold popups rise over their world point and fade.
+local function update_messages(self, ticks)
+	local t = now_ms()
+	hud.layout_messages(self.messages, ticks, t)
+	local visible = {}
+	for i = #self.popups, 1, -1 do
+		local p = self.popups[i]
+		p.rise = p.rise + hud.GOLD_POPUP_RISE * ticks
+		if t >= p.end_ms then
+			p.alpha = p.alpha - hud.MESSAGE_FADE * ticks
+		end
+		if p.alpha <= 0 then
+			table.remove(self.popups, i)
+		else
+			local x, y = project(p.world)
+			if x then
+				p.x, p.y = x, y - p.rise
+				visible[#visible + 1] = p
+			end
+		end
+	end
+	return visible
+end
+
+local WHITE = {1, 1, 1}
+
+-- Apply a widget's look to its node where it changed (the HUD is drawn every frame).
+local function update_button(self, w, node, image)
+	local s = self.button_state[w.name]
+	if not s then
+		s = {}
+		self.button_state[w.name] = s
+	end
+	if s.visible ~= w.visible then
+		gui.set_enabled(node, w.visible)
+		s.visible = w.visible
+	end
+	if not w.visible then
+		return
+	end
+	if s.image ~= image then
+		gui.play_flipbook(node, image)
+		s.image = image
+	end
+	if s.x ~= w.x or s.y ~= w.y or s.w ~= w.w or s.h ~= w.h then
+		place(node, w.x, w.y, w.w, w.h)
+		s.x, s.y, s.w, s.h = w.x, w.y, w.w, w.h
+	end
+	local m = w.modulate or WHITE
+	if s.r ~= m[1] or s.g ~= m[2] or s.b ~= m[3] then
+		gui.set_color(node, vmath.vector4(m[1], m[2], m[3], 1))
+		s.r, s.g, s.b = m[1], m[2], m[3]
+	end
+end
+
+local function draw(self, ui)
+	for _, w in ipairs(ui.widgets) do
+		if w.kind == "checkbox" or w.kind == "button" then
+			local node = self.buttons[w.name]
+			if not node then
+				node = box(w.x, w.y, w.w, w.h, "checkbox_off", LAYER_BASE)
+				self.buttons[w.name] = node
+			end
+			local image = w.kind == "checkbox" and (w.checked and "checkbox_on" or "checkbox_off")
+				or button_image(w, ui.hover == w.name, ui.pressed)
+			update_button(self, w, node, image)
+		end
+	end
+	-- Slider and progress bar.
+	local s = hud.SLIDER
+	place(self.slider_track, s.x, s.y, s.w, s.h)
+	place(self.slider_knob, s.x + s.edge + ui.slider * (s.w - 2 * s.edge) - 16, s.y - 6)
+	local p = hud.PROGRESS
+	place(self.progress_frame, p.x, p.y, p.w, p.h)
+	local fill = (p.w - 16) * math.max(0, math.min(100, ui.progress or 0)) / 100
+	gui.set_enabled(self.progress_fill, fill > 0)
+	place(self.progress_fill, p.x + 8, p.y + 3, math.max(fill, 1), p.h - 6)
+	-- Texts.
+	for key, spec in pairs(ui.texts) do
+		self.texts[key] = text_sync(self.texts[key], spec)
+	end
+	sync_list(self.message_texts, ui.messages)
+	sync_list(self.popup_texts, ui.popups)
+	-- Skills panel.
+	sync_list(self.skill_texts, ui.skills_open and ui.skill_texts or nil, nil, true)
+	sync_optional(self, "skills_exp", ui.skills_open and ui.skills_exp or nil)
+	local help = ui.skills_open and ui.help or nil
+	gui.set_enabled(self.help_frame, help ~= nil)
+	if help then
+		place(self.help_frame, help.frame.x, help.frame.y, help.frame.w, help.frame.h)
+	end
+	sync_optional(self, "help", help and help.text or nil)
+	-- Tooltip.
+	local tip = ui.tooltip
+	gui.set_enabled(self.tooltip_frame, tip ~= nil)
+	if tip then
+		place(self.tooltip_frame, tip.frame.x, tip.frame.y, tip.frame.w, tip.frame.h)
+	end
+	sync_optional(self, "tooltip", tip and tip.text or nil, LAYER_TOP)
+	-- The tutorial page, fading in letter by letter.
+	local page = ui.tutorial
+	if page and page.page ~= self.tutorial_page then
+		self.tutorial_page = page.page
+		self.tutorial_reveal = glyph_text.new_reveal(page.text, page.scale, page.spacing, TUTORIAL_REVEAL_MIN, TUTORIAL_REVEAL_MAX)
+	elseif not page then
+		self.tutorial_page = nil
+	end
+	if page then
+		page.letter_alpha = self.tutorial_reveal.alpha
+	end
+	sync_optional(self, "tutorial", page)
+	sync_optional(self, "tutorial_skip", ui.tutorial_skip_label)
+end
+
+-- `ticks` 16 ms steps of the tutorial page's letter fade.
+local function reveal_tutorial(self, ticks)
+	if self.tutorial_reveal then
+		glyph_text.step_reveal(self.tutorial_reveal, ticks)
+	end
+end
+
+function update(self, dt)
+	local game = session.game
+	if not game then
+		return
+	end
+	-- Messages and popups age in 16 ms ticks of wall time, like the original's HUD.
+	local t = now_ms()
+	local ticks = math.floor((t - self.last_ms) / TICK_MS)
+	self.last_ms = self.last_ms + ticks * TICK_MS
+	local popups = update_messages(self, ticks)
+	reveal_tutorial(self, ticks)
+	local hovered = hud.widget_at(self.mouse.x, self.mouse.y)
+	self.hover = hovered and hovered.name or nil
+	draw(self, hud.build(game, {
+		skills_open = self.skills_open, end_screen = self.end_screen, menu_open = self.menu_open,
+		tutorial_page = self.tutorial_page_shown or 0, tutorial_skip = session.settings.TutorialDisable ~= 0, slider = self.slider,
+		messages = self.messages, popups = popups, mouse = self.mouse, hover = self.hover,
+		pressed = self.pressed_widget ~= nil, help_enabled = session.settings.ShowHelp ~= 0,
+	}))
+end
+
+function on_message(self, message_id, message)
+	if message_id == MSG_HUD_STATE then
+		self.skills_open, self.end_screen, self.menu_open, self.slider = message.skills_open, message.end_screen, message.menu_open, message.slider
+		self.tutorial_page_shown = message.tutorial_page
+	elseif message_id == MSG_MESSAGE then
+		self.messages[#self.messages + 1] = {text = message.text, color = hud.MSG_COLORS[message.kind] or hud.COLOR_WHITE,
+			scale = 0.9, spacing = 7, lines = text_layout.line_count(message.text), alpha = 1,
+			end_ms = now_ms() + message.duration_ms, x = hud.MESSAGE_X, y = hud.MESSAGE_Y}
+	elseif message_id == MSG_POPUP then
+		self.popups[#self.popups + 1] = {text = "+" .. message.amount, color = hud.COLOR_GOLD, scale = 0.9, spacing = 5,
+			world = vmath.vector3(message.x, message.y, message.z), rise = 0, alpha = 1, end_ms = now_ms() + hud.GOLD_POPUP_MS, x = 0, y = 0}
+	end
+end
+
+local function slider_value(self)
+	local s = hud.SLIDER
+	local frac = (self.mouse.x - s.x - s.edge) / (s.w - 2 * s.edge)
+	return math.floor(math.max(0, math.min(1, frac)) * Ticker.SLIDER_MAX + 0.5)
+end
+
+local function post_action(name, extra)
+	local m = extra or {}
+	m.name = name
+	msg.post(LOCATION, "hud_action", m)
+end
+
+-- Input over the widgets is the HUD's; everything else goes on to the location script.
+function on_input(self, action_id, action)
+	if action.x then
+		self.mouse.x, self.mouse.y = screen.mouse(action)
+	end
+	local pressed = self.pressed_widget
+	if action_id == nil then
+		if pressed and pressed.kind == "slider" then
+			post_action("slider", {value = slider_value(self)})
+		end
+		return false
+	end
+	local w = hud.widget_at(self.mouse.x, self.mouse.y)
+	if action_id == CLICK then
+		if action.pressed and w then
+			self.pressed_widget = w
+			if w.kind == "slider" then
+				post_action("slider", {value = slider_value(self)})
+			end
+			return true
+		elseif action.released and pressed then
+			self.pressed_widget = nil
+			if w == pressed and w.kind ~= "slider" and not w.disabled then
+				post_action(w.name, {skill = w.skill, downgrade = w.downgrade})
+			end
+			return true
+		end
+	elseif action_id == RCLICK and w then
+		return true
+	end
+	return false
+end

@@ -1,0 +1,257 @@
+-- The screen controller: owns the session (main/session.lua) and switches the screens,
+-- each a collection loaded through a collection proxy of this game object: the main menu,
+-- the map, one screen per location and the ending (final titles, high scores). One screen
+-- is loaded at a time, so leaving one frees everything it used. The flow follows
+-- `_fmainloop` (docs/01, docs/09): menu -> map -> location -> (congratulations) -> map ...
+-- -> final titles -> high scores -> menu.
+local messages = require("main.messages")
+local session = require("main.session")
+local storage = require("main.storage")
+local config = require("main.config")
+local display = require("main.display")
+local log = require("main.log")
+local profile = require("sim.profile")
+local data = require("sim.data")
+local Game = require("sim.game")
+
+local GAME_LOADED_TEXT = 59
+local HIRE_TEXTS = {83, 84, 85}  -- "You have spent" N "gold to employ" K "people"
+local HIRE_MESSAGE_MS = 5000
+local TITUL_OF_MODE = {new = 0, hard = 1, insane = 2}
+-- Frames the loading overlay is drawn before a location's (frame-stalling) load starts.
+local LOADING_FRAMES = 2
+
+local function proxy(name)
+	return msg.url(nil, "main", name)
+end
+
+-- Load `target` now, or after the loading overlay had its frames on screen.
+local function begin_load(self)
+	self.load_countdown = self.with_loading and LOADING_FRAMES or 0
+end
+
+-- Unload the current screen, then load `target`. A synchronous `load`: `async_load`
+-- crashes the desktop engine (MoltenVK) in its asynchronous texture upload (Defold 1.13.1).
+local function switch_to(self, target, with_loading)
+	self.target = target
+	self.in_location = false
+	self.with_loading = with_loading
+	if with_loading then
+		msg.post("#loading", "show")
+	end
+	if self.current then
+		-- `unload` finalizes the world itself; an explicit `disable` fails when the screen
+		-- is left in the frame it was enabled.
+		msg.post(self.current, "unload")
+		self.current = nil
+	else
+		begin_load(self)
+	end
+end
+
+local function show_menu(self)
+	switch_to(self, proxy("menu"), false)
+end
+
+-- The campaign's entered location snapshotted: `Location<L>` for a restart after a defeat,
+-- `Automatic` for Continue.
+local function snapshot_location()
+	session.save_game(profile.location_save(session.game.location))
+	session.save_game(profile.SAVE_AUTOMATIC)
+end
+
+-- The map of the session's campaign. The location it shows is already entered; it is
+-- snapshotted right away, so leaving the game on the map never loses a finished location.
+local function show_map(self)
+	snapshot_location()
+	switch_to(self, proxy("map"), false)
+end
+
+-- `session.ending`: {titles = bool, score = n or nil}.
+local function show_ending(self, ending)
+	session.ending = ending
+	switch_to(self, proxy("ending"), false)
+end
+
+-- Play the session's game on its location.
+local function enter_location(self)
+	switch_to(self, proxy("location" .. session.game.location), true)
+	self.in_location = true
+end
+
+-- `_fclearlocationsaves`: going back to the menu, and after the final titles.
+local function clear_menu_saves()
+	for _, name in ipairs(profile.saves_cleared_on_menu()) do
+		storage.delete(name)
+	end
+end
+
+-- `_fshowmenu`: the picked difficulty (survival: 0) becomes the current one.
+local function select_titul(titul)
+	profile.select_titul(session.settings, titul)
+	session.save_settings()
+end
+
+-- `_fhandlemapmenu`: the message about the inhabitants `_fnextlocation` just hired with
+-- `gold` spent, or nil when it hired nobody.
+local function hire_notice(gold, hired)
+	if hired <= 0 then
+		return nil
+	end
+	local t = function(k) return session.data:text(k) end
+	return {
+		text = string.format("%s %d %s %d <vd>%s.", t(HIRE_TEXTS[1]), gold, t(HIRE_TEXTS[2]), hired, t(HIRE_TEXTS[3])),
+		kind = Game.MSG_GREEN, duration_ms = HIRE_MESSAGE_MS,
+	}
+end
+
+-- The campaign is won (`_fnextlocation` past location 6): unlock the next difficulty,
+-- record the score, then the final titles and the score sheet.
+local function finish_campaign(self)
+	profile.finish_campaign(session.settings, session.game.titul)
+	session.save_settings()
+	local score = session.game:highscore()
+	session.add_highscore(false, score)
+	clear_menu_saves()
+	show_ending(self, {titles = true, score = score})
+end
+
+-- A game picked in the main menu.
+local function start_game(self, mode)
+	if mode == "continue" then
+		if session.load_game(profile.SAVE_AUTOMATIC) then
+			enter_location(self)
+		else
+			-- An incompatible or broken save: the menu comes back instead of a dead end.
+			log.warn("controller", "cannot continue: the automatic save does not load")
+			show_menu(self)
+		end
+	elseif TITUL_OF_MODE[mode] then
+		select_titul(TITUL_OF_MODE[mode])
+		session.new_campaign(TITUL_OF_MODE[mode])
+		session.notice = nil
+		show_map(self)
+	elseif mode == "survival" then
+		select_titul(0)
+		session.new_survival()
+		enter_location(self)
+	else
+		log.warn("controller", "unknown game mode %s", tostring(mode))
+		show_menu(self)
+	end
+end
+
+-- A phone may close a game sent to the background without warning: leaving the window
+-- writes the automatic save under the same rule as leaving through the menu (a campaign
+-- with no raid on). A deviation for the mobile platforms.
+local function on_window_event(self, event)
+	local game = session.game
+	if event == window.WINDOW_EVENT_FOCUS_LOST and self.in_location and game and profile.can_autosave(game) then
+		session.save_game(profile.SAVE_AUTOMATIC)
+	end
+end
+
+function init(self)
+	window.set_listener(on_window_event)
+	-- A loaded collection receives input only through the proxy's owner.
+	msg.post(".", "acquire_input_focus")
+	session.load()
+	local s = session.settings
+	-- Debug: try the Wide mode without touching the saved settings.
+	display.force_wide = config.get_flag("wide")
+	msg.post(messages.AUDIO, messages.SET_VOLUMES, {music = s.MusicVol, sound = s.SoundVol})
+	-- The render script's socket exists only once the first frame runs.
+	self.apply_display = true
+	-- Debug starts (main/config.lua): `continue=1`, `location=N` [`titul=T`], `survival=1`,
+	-- or `show_ending=N` (the final titles and a score of N).
+	if config.get_int("show_ending", 0) > 0 then
+		show_ending(self, {titles = true, score = config.get_int("show_ending", 0)})
+	elseif config.get_flag("survival") then
+		start_game(self, "survival")
+	elseif config.get_flag("continue") and session.load_game(profile.SAVE_AUTOMATIC) then
+		enter_location(self)
+	elseif config.get_int("location", 0) > 0 then
+		local location = math.max(1, math.min(data.LOCATIONS, config.get_int("location", 1)))
+		session.new_campaign(config.get_int("titul", 0), location)
+		snapshot_location()  -- what the map would have written
+		enter_location(self)
+	else
+		show_menu(self)
+	end
+end
+
+function update(self)
+	if self.apply_display then
+		self.apply_display = nil
+		display.apply(session.settings)
+	end
+	if self.load_countdown then
+		if self.load_countdown <= 0 then
+			self.load_countdown = nil
+			msg.post(self.target, "load")
+		else
+			self.load_countdown = self.load_countdown - 1
+		end
+	end
+end
+
+function on_message(self, message_id, message, sender)
+	if message_id == messages.PROXY_LOADED then
+		self.current = sender
+		msg.post(sender, "init")
+		msg.post(sender, "enable")
+	elseif message_id == messages.PROXY_UNLOADED then
+		if self.target then
+			begin_load(self)
+		end
+	elseif message_id == messages.SCREEN_READY then
+		msg.post("#loading", "hide")
+		log.debug("controller", "screen ready: %s", tostring(sender))
+	elseif message_id == messages.START_GAME then
+		start_game(self, message.mode)
+	elseif message_id == messages.MAP_CONTINUE then
+		-- `_fhandlemapmenu`: the location's tutorial page, unless the player turned it off.
+		if session.settings.TutorialDisable == 0 then
+			session.tutorial_page = session.data:location(session.game.location).tutorial_page
+		end
+		enter_location(self)
+	elseif message_id == messages.NEXT_LOCATION then
+		local finished, spent, hired = session.game:next_location()
+		if finished then
+			finish_campaign(self)
+		else
+			session.notice = hire_notice(spent, hired)
+			show_map(self)
+		end
+	elseif message_id == messages.RESTART_LOCATION then
+		-- `_frestartlocation` after a defeat: back to the location's snapshot (survival starts
+		-- over, `_finitsurvival`).
+		local game = session.game
+		if game.survival_mode then
+			session.new_survival()
+		elseif not session.load_game(profile.location_save(game.location)) then
+			session.new_campaign(game.titul, game.location)
+		end
+		enter_location(self)
+	elseif message_id == messages.LEAVE_TO_MENU then
+		clear_menu_saves()
+		show_menu(self)
+	elseif message_id == messages.SHOW_MENU then
+		show_menu(self)
+	elseif message_id == messages.ENDING_DONE then
+		show_menu(self)
+	elseif message_id == messages.SHOW_HIGHSCORES then
+		show_ending(self, {titles = false})
+	elseif message_id == messages.QUIT then
+		if not html5 then
+			sys.exit(0)
+		end
+	elseif message_id == messages.QUICK_SAVE then
+		session.save_game(profile.quick_save_name(session.game))
+	elseif message_id == messages.QUICK_LOAD then
+		if session.load_game(profile.quick_save_name(session.game)) then
+			session.notice = {text = session.data:text(GAME_LOADED_TEXT), kind = Game.MSG_WHITE, duration_ms = 1500}
+			enter_location(self)
+		end
+	end
+end

@@ -1,4 +1,8 @@
 path_settings {
+  path: "/assets/hud/**"
+  profile: "Gui"
+}
+path_settings {
   path: "**"
   profile: "Default"
 }
@@ -11,5 +15,16 @@ profiles {
     }
     mipmaps: true
     premultiply_alpha: false
+  }
+}
+profiles {
+  name: "Gui"
+  platforms {
+    os: OS_ID_GENERIC
+    formats {
+      format: TEXTURE_FORMAT_RGBA
+    }
+    mipmaps: true
+    premultiply_alpha: true
   }
 }

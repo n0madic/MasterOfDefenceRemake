@@ -1,0 +1,81 @@
+name: "menu"
+instances {
+  id: "controller"
+  prototype: "/main/menu/menu.go"
+}
+instances {
+  id: "camera"
+  prototype: "/main/menu/camera.go"
+}
+instances {
+  id: "env"
+  prototype: "/generated/go/Menu_env.go"
+}
+instances {
+  id: "sky"
+  prototype: "/generated/go/Menu_cameraEnv.go"
+}
+instances {
+  id: "buttons"
+  prototype: "/generated/go/Menu_buttons.go"
+  position {
+    x: 0.0
+    y: 0.0
+    z: -10.0
+  }
+}
+instances {
+  id: "playgame"
+  prototype: "/generated/go/Menu_playgame.go"
+  position {
+    x: 0.0
+    y: 0.0
+    z: -10.0
+  }
+}
+instances {
+  id: "credits"
+  prototype: "/generated/go/Menu_credits.go"
+  position {
+    x: 0.0
+    y: 0.0
+    z: -10.0
+  }
+}
+instances {
+  id: "loading"
+  prototype: "/generated/go/Menu_loading.go"
+  position {
+    x: 0.0
+    y: 0.0
+    z: -10.0
+  }
+}
+instances {
+  id: "sel_buttons"
+  prototype: "/generated/go/Menu_sel.go"
+  position {
+    x: 0.0
+    y: 0.0
+    z: -10.0
+  }
+}
+instances {
+  id: "sel_playgame"
+  prototype: "/generated/go/Menu_sel.go"
+  position {
+    x: 0.0
+    y: 0.0
+    z: -10.0
+  }
+}
+instances {
+  id: "sel_credits"
+  prototype: "/generated/go/Menu_sel.go"
+  position {
+    x: 0.0
+    y: 0.0
+    z: -10.0
+  }
+}
+scale_along_z: 0

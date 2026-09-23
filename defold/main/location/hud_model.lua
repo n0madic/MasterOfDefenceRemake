@@ -1,9 +1,9 @@
--- The HUD as data (docs/09, docs/13): widget layout in the 800x600 box, the texts and
--- tooltips composed from the simulation, click dispatch. The gui script only draws the
--- snapshot this module writes to `state.ui`.
-local state = require("main.state")
+-- The HUD as data (docs/09, docs/13): widget layout in the 800x600 box and the texts and
+-- tooltips composed from the simulation. Engine independent; main/location/hud.gui_script
+-- draws the snapshot `build` returns and owns the input.
 local Game = require("sim.game")
 local Skills = require("sim.skills")
+local profile = require("sim.profile")
 local data = require("sim.data")
 local blitz = require("sim.blitz")
 local text_layout = require("main.blitz_text")
@@ -30,9 +30,6 @@ M.PROGRESS = {x = 648, y = 512, w = 152, h = 32}
 M.TOWER_BUTTON_Y = 530
 M.TOWER_BUTTON_X = {5, 70, 135, 200, 265}
 M.UPGRADE_SLOTS = {200, 265, 330}
--- The skills window: original rule locks it until location 2 (`_fshowupgradeswindow`);
--- the experiment allows it on location 1 as well.
-M.SKILLS_ON_LOCATION_1 = true
 M.SKILL_ROWS = {
 	-- {id, y button, y text, tip+, tip-, help index}
 	{Skills.COLD, 105, 113, 61, 96, 0},
@@ -46,6 +43,10 @@ M.SKILL_ROWS = {
 	{Skills.GOLD, 360, 365, 32, 91, 8},
 }
 M.SKILL_PLUS_X, M.SKILL_MINUS_X, M.SKILL_TEXT_X, M.SKILL_BUTTON = 520, 550, 470, 30
+M.COLOR_STORY = {0, 1, 130 / 255}
+M.TUTORIAL_TEXT = {x = 100, y = 105, spacing = 4.5}
+M.TUTORIAL_SKIP_LABEL = {x = 122, y = 347, scale = 0.8, text = 81}
+M.TUTORIAL_PAGE_HELP = 10
 
 -- --- widgets ----------------------------------------------------------------------------
 
@@ -58,8 +59,12 @@ function M.build_widgets()
 	for type_id = 1, 5 do
 		w[#w + 1] = button("tower" .. type_id, M.STYLE_BIG, type_id, M.TOWER_BUTTON_X[type_id], M.TOWER_BUTTON_Y, 64, 64, 20 + type_id)
 	end
+	w[#w + 1] = button("balloon", M.STYLE_BIG, 8, M.UPGRADE_SLOTS[3], M.TOWER_BUTTON_Y, 64, 64, 89)
 	w[#w + 1] = button("upgrade", M.STYLE_BIG, 6, 664, M.TOWER_BUTTON_Y, 64, 64, 26)
 	w[#w + 1] = button("sell", M.STYLE_BIG, 7, 737, M.TOWER_BUTTON_Y, 64, 64, 29)
+	w[#w + 1] = button("menu", M.STYLE_SMALL2, 1, 278, -3, 32, 32, 67)
+	w[#w + 1] = button("save", M.STYLE_SMALL2, 3, 310, -3, 32, 32, 65)
+	w[#w + 1] = button("load", M.STYLE_SMALL2, 0, 450, -3, 32, 32, 66)
 	w[#w + 1] = button("health", M.STYLE_SMALL1, 10, 483, -3, 32, 32, 79)
 	w[#w + 1] = button("skills", M.STYLE_SMALL2, 2, 600, 480, 35, 35, 68)
 	w[#w + 1] = button("stop", M.STYLE_SMALL2, 12, 590, 520, 30, 30, 100)
@@ -73,15 +78,17 @@ function M.build_widgets()
 		w[#w + 1] = plus
 		w[#w + 1] = minus
 	end
+	-- The tutorial panel: "next" and the "skip this tutorial" checkbox.
+	local next_page = button("tutorial_next", M.STYLE_SMALL1, 9, 665, 345, 32, 32, nil)
+	next_page.tutorial = true
+	w[#w + 1] = next_page
+	w[#w + 1] = {name = "tutorial_skip", kind = "checkbox", x = 100, y = 345, w = 20, h = 20, visible = false, tutorial = true}
 	local ok = button("skills_ok", M.STYLE_SMALL1, 2, 530, 405, 35, 35, nil)
 	ok.panel = true
 	local cancel = button("skills_cancel", M.STYLE_SMALL2, 4, 335, 402, 35, 35, nil)
 	cancel.panel = true
 	w[#w + 1] = ok
 	w[#w + 1] = cancel
-	local restart = button("restart", M.STYLE_SMALL1, 2, 383, 340, 35, 35, nil)
-	restart.end_screen = true
-	w[#w + 1] = restart
 	return w
 end
 
@@ -236,36 +243,46 @@ local function text(t, x, y, color, opts)
 		cx = opts.cx or false, cy = opts.cy or false, alpha = opts.alpha or 1}
 end
 
--- Rebuild `state.ui` for this frame. `ctx`: {skills_open, placing, ticker, messages,
--- popups, mouse, hover, pressed, end_screen, help_enabled}.
+-- The HUD snapshot of this frame. `ctx`: {skills_open, end_screen, menu_open, tutorial_page,
+-- tutorial_skip, slider (0..100),
+-- messages, popups, mouse, hover, pressed, help_enabled}.
 function M.build(game, ctx)
 	local d = game.data
-	local ui = state.ui
+	local ui = {}
 	local skills = game.skills
-	-- Buttons: visibility per game state.
-	local slots = {M.UPGRADE_SLOTS[1], M.UPGRADE_SLOTS[2], M.UPGRADE_SLOTS[3]}
+	-- Buttons: visibility per game state. `_fupdateupgradebuttons`: Icerock, Flame and the
+	-- balloon take the free slots from the left.
+	local extra = {
+		{M.by_name.tower4, skills.cold_magic > 0},
+		{M.by_name.tower5, skills.fire_magic > 0},
+		{M.by_name.balloon, game.balloon ~= nil and game.balloon.enabled},
+	}
 	local slot = 1
-	for type_id = 4, 5 do
-		local w = M.by_name["tower" .. type_id]
-		w.visible = (type_id == 4 and skills.cold_magic > 0) or (type_id == 5 and skills.fire_magic > 0)
+	for _, e in ipairs(extra) do
+		local w = e[1]
+		w.visible = e[2]
 		if w.visible then
-			w.x = slots[slot]
+			w.x = M.UPGRADE_SLOTS[slot]
 			slot = slot + 1
 		end
 	end
 	local t = game.selected_tower
 	M.by_name["stop"].visible = t ~= nil and t.freeze * skills.cold_magic > 0
+	-- `_fhandlelevels`: the save / load buttons (sim/profile.lua has the rules).
+	M.by_name["save"].visible = profile.can_quick_save(game, true)
+	M.by_name["load"].visible = profile.can_quick_load(game, true)
 	M.by_name["upgrade"].disabled = t ~= nil and Game.tower_is_upgrading(t)
-	-- A modal sheet (the end screen, else the skills window) leaves the panel drawn but
-	-- inert: only its own widgets, and the skills button that closes the window, respond.
-	local modal = (ctx.end_screen and "end_screen") or (ctx.skills_open and "panel") or nil
+	-- A modal sheet (the in-game menu, the end screen, else the skills window) leaves the
+	-- panel drawn but inert: only its own widgets, and the skills button that closes the
+	-- window, respond.
+	local modal = ((ctx.menu_open or ctx.end_screen) and "end_screen") or (ctx.skills_open and "panel") or nil
 	for _, w in ipairs(M.widgets) do
 		w.inert = modal ~= nil and not w[modal] and not (modal == "panel" and w.name == "skills")
 		if w.panel then
 			w.visible = ctx.skills_open
 		end
-		if w.end_screen then
-			w.visible = ctx.end_screen ~= nil
+		if w.tutorial then
+			w.visible = ctx.tutorial_page > 0
 		end
 		if w.skill then
 			if w.downgrade then
@@ -274,6 +291,10 @@ function M.build(game, ctx)
 			w.modulate = (w.skill == Skills.FIRE and not w.downgrade and skills.fire_magic == 5) and M.COLOR_FIRE6 or nil
 		end
 	end
+	-- `_fshowtutorial`: the "skip" checkbox exists only on location 1 below the help page.
+	local skip = M.by_name["tutorial_skip"]
+	skip.visible = skip.visible and game.location == 1 and ctx.tutorial_page < M.TUTORIAL_PAGE_HELP
+	skip.checked = ctx.tutorial_skip
 	ui.widgets = M.widgets
 	ui.hover = ctx.hover
 	ui.pressed = ctx.pressed
@@ -283,10 +304,20 @@ function M.build(game, ctx)
 		lifes = text(tostring(game.lifes), 760, 40, M.COLOR_LIFES, {cx = true, cy = true}),
 		extra = text(game.extra_lifes > 0 and ("+" .. game.extra_lifes) or "", 765, 55, M.COLOR_EXTRA, {scale = 0.9, spacing = 4}),
 		exp = text(tostring(game.experience), 15, 41, M.COLOR_EXP, {cx = true, cy = true}),
-		raid = text(string.format("%s: %d/%d", d:text(48), game:raid_index_in_location(), game:raids_in_location()), 330, 5, M.COLOR_WHITE),
+		raid = text(game.survival_mode and string.format("%s: %d", d:text(48), game.curlevel)
+			or string.format("%s: %d/%d", d:text(48), game:raid_index_in_location(), game:raids_in_location()), 330, 5, M.COLOR_WHITE),
 		info = text(M.info_text(game), 400, 500, M.COLOR_WHITE),
 	}
-	ui.slider = ctx.ticker.slider / 100
+	ui.slider = ctx.slider / 100
+	if ctx.tutorial_page > 0 then
+		local t = M.TUTORIAL_TEXT
+		ui.tutorial = text(d:tutorial_text(ctx.tutorial_page), t.x, t.y, M.COLOR_STORY, {spacing = t.spacing})
+		ui.tutorial.page = ctx.tutorial_page
+		if skip.visible then
+			local l = M.TUTORIAL_SKIP_LABEL
+			ui.tutorial_skip_label = text(d:text(l.text), l.x, l.y, M.COLOR_STORY, {scale = l.scale})
+		end
+	end
 	ui.progress = (t and Game.tower_is_upgrading(t)) and (t.anim_time * 10) or 0
 	ui.messages = ctx.messages
 	ui.popups = ctx.popups
@@ -322,12 +353,12 @@ function M.build(game, ctx)
 				frame = {x = x, y = y - M.TIP_MARGIN, w = M.TIP_WIDTH, h = th + 2 * M.TIP_MARGIN}}
 		end
 	end
-	ui.end_screen = ctx.end_screen
+	return ui
 end
 
 -- --- messages ---------------------------------------------------------------------------
 
--- Message / gold popup lists live in the controller (`level.script`) and are laid out here:
+-- The message and gold popup lists of the HUD, laid out here:
 -- newest message at the bottom, older ones stacked above, a multi-line message takes a
 -- slot per line; fading per tick.
 function M.layout_messages(messages, ticks, now_ms)

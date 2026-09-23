@@ -1,0 +1,57 @@
+-- The world map between locations (`_floadmapmenu` / `_fhandlemapmenu`, docs/09): the
+-- map sheet seeked to the location, the location's point turned gold, the storyline text
+-- revealed letter by letter (map.gui_script) and "continue".
+local session = require("main.session")
+local messages = require("main.messages")
+local render_scene = require("main.render_scene")
+local screen = require("main.screen")
+local Ticker = require("main.ticker")
+local MenuScene = require("main.ui.menu_scene")
+local model = require("main.views.model")
+local config = require("main.config")
+
+-- The difficulty plank (`_floadmapmenu`: `titul<MenusOpened>.png`).
+go.property("titul1", resource.texture("/assets/textures/Menu/Titul1.png"))
+go.property("titul2", resource.texture("/assets/textures/Menu/Titul2.png"))
+go.property("titul3", resource.texture("/assets/textures/Menu/Titul3.png"))
+
+local MAP_MODEL = "Menu/map"
+local FLAG_COLOR = vmath.vector4(1, 203 / 255, 0, 1)  -- `EntityColor point<L>, 255, 203, 0`
+local AUTO_ADVANCE_TICKS = 60  -- debug `auto_advance=1`: "continue" by itself
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	self.ticker = Ticker.new()
+	self.mouse = {x = screen.WIDTH / 2, y = screen.HEIGHT / 2}
+	self.ticks = 0
+	local location = session.game.location
+	self.map = MenuScene.new(go.get_id("map"), MAP_MODEL, {"map_continue"}, go.get_id("sel"))
+	self.map:seek(location - 0.001)
+	model.set_group(self.map.obj, "point" .. location, "entity_color", FLAG_COLOR)
+	self.map:set_titul(session.settings.MenusOpened, {self.titul1, self.titul2, self.titul3})
+	render_scene.set(render_scene.NEUTRAL)
+	msg.post(messages.AUDIO, messages.PLAY_MUSIC, {name = "menu"})
+	msg.post("#gui", "storyline", {text = session.data:storyline(location)})
+	msg.post(messages.CONTROLLER, messages.SCREEN_READY)
+end
+
+function update(self, dt)
+	for _ = 1, self.ticker:advance(dt) do
+		self.map:tick(self.mouse.x, self.mouse.y)
+		msg.post("#gui", "tick")
+		self.ticks = self.ticks + 1
+		if self.ticks == AUTO_ADVANCE_TICKS and config.get_flag("auto_advance") then
+			msg.post(messages.CONTROLLER, messages.MAP_CONTINUE)
+		end
+	end
+end
+
+function on_input(self, action_id, action)
+	if action.x then
+		self.mouse.x, self.mouse.y = screen.mouse(action)
+	end
+	if action_id == hash("click") and action.pressed and self.map:click(self.mouse.x, self.mouse.y) == "map_continue" then
+		msg.post(messages.CONTROLLER, messages.MAP_CONTINUE)
+		return true
+	end
+end

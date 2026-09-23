@@ -1,0 +1,133 @@
+-- Texts and widgets over the main menu: the version label, the remake credit while the
+-- credits sheet is open, and the settings widgets (`_fguicreateoptionsbuttons` /
+-- `_fhandleoptionsgui` / `_fsaveoptions`) shown once the camera has flown into the
+-- settings view. The original's resolution, colour depth and VSync are gone (the game is
+-- drawn at the window's size); their planks carry the 4:3 / Wide choice. Volumes change
+-- as the sliders move; "ok" stores everything.
+local glyph_text = require("main.ui.glyph_text")
+local widgets = require("main.ui.widgets")
+local session = require("main.session")
+local messages = require("main.messages")
+local screen = require("main.screen")
+local display = require("main.display")
+
+local VERSION_TEXT = "Remake based on v1.67e"
+local CREDIT_TEXT = "Remake by n0madic"
+local COLOR_EXP = {247 / 255, 232 / 255, 172 / 255}
+local COLOR_TITLE = {0, 200 / 255, 120 / 255}
+local VERSION_Y = 580
+local CREDIT_POS = {x = 20, y = 580}
+local SPACING = 5
+local GAMMA_RANGE = display.GAMMA_RANGE
+local TEXT_GAMMA, TEXT_MUSIC, TEXT_SOUND, TEXT_NAME = 15, 16, 17, 18
+local NAME_LENGTH = 20
+
+-- The widgets show the saved settings.
+local function show_settings(self)
+	local s = session.settings
+	self.wide[1].on, self.wide[2].on = s.WideScreen == 0, s.WideScreen == 1
+	self.gamma.value = s.GammaIntensity + GAMMA_RANGE
+	self.music.value = math.floor(s.MusicVol * 100 + 0.5)
+	self.sound.value = math.floor(s.SoundVol * 100 + 0.5)
+	self.name.value = s.PlayerName
+	for _, w in ipairs({self.wide[1], self.wide[2], self.gamma, self.music, self.sound, self.name}) do
+		self.options:refresh(w)
+	end
+end
+
+local function build_options(self)
+	local p = widgets.new()
+	local t = function(k) return session.data:text(k) end
+	p:label(700, 365, "Screen")
+	self.wide = {p:toggle(700, 380, "4:3", false, "screen"), p:toggle(700, 400, "Wide", false, "screen")}
+	p:label(360, 542, t(TEXT_GAMMA))
+	self.gamma = p:slider(450, 544, 200, 16, 0, 2 * GAMMA_RANGE, GAMMA_RANGE)
+	p:label(20, 430, t(TEXT_MUSIC))
+	self.music = p:slider(20, 460, 280, 16, 0, 100, 0)
+	p:label(50, 505, t(TEXT_SOUND))
+	self.sound = p:slider(50, 530, 240, 16, 0, 100, 0)
+	p:label(20, 340, t(TEXT_NAME))
+	self.name = p:textbox(20, 360, 280, 30, "", NAME_LENGTH)
+	if display.can_toggle_fullscreen() then
+		self.fullscreen = p:toggle(380, 520, "Fullscreen", display.is_fullscreen())
+	end
+	p:set_visible(false)
+	self.options = p
+	show_settings(self)
+end
+
+local function preview_volumes(self)
+	msg.post(messages.AUDIO, messages.SET_VOLUMES, {music = self.music.value / 100, sound = self.sound.value / 100})
+end
+
+-- `_fsaveoptions`.
+local function apply(self)
+	local s = session.settings
+	s.MusicVol, s.SoundVol = self.music.value / 100, self.sound.value / 100
+	s.GammaIntensity = self.gamma.value - GAMMA_RANGE
+	s.WideScreen = self.wide[2].on and 1 or 0
+	s.PlayerName = self.name.value:match("^%s*(.-)%s*$")
+	session.save_settings()
+	preview_volumes(self)
+	display.apply(s)
+end
+
+function init(self)
+	-- The original drew "v1.67e" left-aligned at (700, 580); the longer label keeps its
+	-- right edge where that one ended.
+	local right = 700 + #"v1.67e" * (16 - SPACING)
+	local width = glyph_text.width(VERSION_TEXT, 1, SPACING)
+	glyph_text.sync(nil, {text = VERSION_TEXT, x = right - width, y = VERSION_Y, color = COLOR_EXP, scale = 1, spacing = SPACING})
+	self.credit = nil
+	build_options(self)
+end
+
+function update(self)
+	self.options:update()
+end
+
+function on_message(self, message_id, message)
+	if message_id == hash("credits") then
+		if message.shown and not self.credit then
+			self.credit = glyph_text.sync(nil, {text = CREDIT_TEXT, x = CREDIT_POS.x, y = CREDIT_POS.y, color = COLOR_TITLE, scale = 1, spacing = SPACING})
+		elseif not message.shown then
+			glyph_text.delete(self.credit)
+			self.credit = nil
+		end
+	elseif message_id == hash("options_visible") then
+		if message.shown ~= self.options.visible then
+			self.options:set_visible(message.shown)
+		end
+	elseif message_id == hash("options_apply") then
+		apply(self)
+	elseif message_id == hash("options_cancel") then
+		-- Left without OK (Esc / Back): the saved values again, the previewed volumes and
+		-- gamma included.
+		show_settings(self)
+		preview_volumes(self)
+		display.apply(session.settings)
+	end
+end
+
+function on_input(self, action_id, action)
+	local x, y = 0, 0
+	if action.x then
+		x, y = screen.mouse(action)
+	end
+	local changed = self.options:on_input(action_id, action, x, y)
+	if not changed then
+		return false
+	end
+	if changed == self.music or changed == self.sound then
+		preview_volumes(self)
+	elseif changed == self.gamma then
+		-- `_fhandleoptionsgui`: the gamma applies while the slider moves.
+		display.apply({WideScreen = session.settings.WideScreen, GammaIntensity = self.gamma.value - GAMMA_RANGE})
+	elseif changed == self.fullscreen then
+		display.set_fullscreen(self.fullscreen.on)
+	end
+	if changed.kind == "toggle" then
+		msg.post(messages.AUDIO, messages.PLAY_SOUND, {name = "check"})
+	end
+	return true
+end

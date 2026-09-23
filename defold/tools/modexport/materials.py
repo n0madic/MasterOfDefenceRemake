@@ -13,9 +13,9 @@ TEX_FLAG_ALPHA, TEX_FLAG_MASKED, TEX_FLAG_SPHERE = 2, 4, 64
 TEX_BLEND_ALPHA, TEX_BLEND_MULTIPLY, TEX_BLEND_ADD, TEX_BLEND_MULTIPLY2 = 1, 2, 3, 5
 MAX_LAYERS = 2
 MASK_THRESHOLD = 0.5
-# Only the fully-solid texels of a base decal write depth (its soft blended copy on top hides
-# this hard cut); matches the Godot port's SOLID_ALPHA.
-GROUND_BASE_SOLID_ALPHA = 0.99
+# Only the fully-solid texels of a depth companion write depth (the soft blended brush on top
+# hides this hard cut); matches the Godot port's SOLID_ALPHA.
+SOLID_ALPHA = 0.99
 MORPH_WEIGHTS_PER_VEC4 = 4
 
 
@@ -40,6 +40,51 @@ def fmt(v: float) -> str:
     return f"{v:.6f}"
 
 
+
+# Lit materials' light constants: filled every frame by render/blitz.render_script in the
+# view space of the screen's camera (so the overlay sheets, which hang on that camera, see
+# the scene's lights where the original's did); these defaults (full ambient, no
+# directional light) only show if the render script failed to pass them.
+# `light_dir`: the directional light's direction; `point_light<i>`: a point light's
+# position and range (w = 0: no light), `point_color<i>`: its RGB.
+NEUTRAL_LIGHT = {"light_dir": [0.0, -1.0, 0.0, 0.0], "light_color": [0.0, 0.0, 0.0, 1.0], "ambient": [1.0, 1.0, 1.0, 1.0],
+                 "point_light0": [0.0, 0.0, 0.0, 0.0], "point_color0": [0.0, 0.0, 0.0, 1.0],
+                 "point_light1": [0.0, 0.0, 0.0, 0.0], "point_color1": [0.0, 0.0, 0.0, 1.0]}
+
+# A Blitz point light (gxlight.cpp): Direct3D 7 with no range cut-off and the attenuation
+# 1 / (d / range) of `LightRange` (1000 by default), Lambert only.
+POINT_LIGHT_FUNCTION = [
+    "vec3 point_light(vec4 light, vec4 color, vec3 p, vec3 n)",
+    "{",
+    "    if (light.w <= 0.0) return vec3(0.0);",
+    "    vec3 d = light.xyz - p;",
+    "    float dist = max(length(d), 0.0001);",
+    "    return color.rgb * (light.w / dist) * max(dot(n, d / dist), 0.0);",
+    "}",
+]
+
+
+
+def order_tag(order: int, overlay: bool = False) -> str:
+    """Render pass tag of an EntityOrder: `order_30`, `order_m5` for -5; the overlay layer
+    (the HUD panel and the menu sheets, drawn by the fixed camera) has its own `hud_*`."""
+    name = f"m{-order}" if order < 0 else str(order)
+    if overlay:
+        return "hud" if order == 0 else f"hud_{name}"
+    return f"order_{name}"
+
+
+def canvas_tag(order: int) -> str:
+    """Render pass tag of a negative EntityOrder of an overlay sheet drawn across the whole
+    canvas (`canvas_m5`) rather than the 4:3 box: the loading curtain covers Wide's sides."""
+    return f"canvas_m{-order}"
+
+
+# The tower bases' ground layer (Military's `dno` brush): the location's `dno<N>.png`,
+# multiplied, relative to the tower models' folder.
+GROUND_BASE_LAYER = {"texture": "dno.png", "flags": 523, "blend": 2, "uv2": False, "sphere": False,
+                     "uri": "../../textures/Towers/dno1.png", "clamp_u": False, "clamp_v": False}
+
 class MaterialVariant:
     """One generated Defold material: a Blitz brush of one model, drawn at a given
     EntityOrder, with the shader features the model needs (`skinned`, `morph_targets`)."""
@@ -47,19 +92,28 @@ class MaterialVariant:
     def __init__(self, base_name: str, gltf_material: dict, info: dict, *, order: int = 0, hud: bool = False,
                  skinned: bool = False, morph_targets: int = 0, animmap: bool = False, lit_default: bool = False,
                  bone_count: int = 0, ground_base: bool = False, solid_depth: bool = False,
-                 billboard: bool = False):
+                 billboard: bool = False, frame_atlas: bool = False, node_rank: int | None = None,
+                 canvas: bool = False):
         self._gltf_material = gltf_material
         self._info = info
         self._kwargs = dict(order=order, hud=hud, skinned=skinned, morph_targets=morph_targets,
-                            animmap=animmap, lit_default=lit_default, bone_count=bone_count, billboard=billboard)
+                            animmap=animmap, lit_default=lit_default, bone_count=bone_count, billboard=billboard,
+                            frame_atlas=frame_atlas, node_rank=node_rank, canvas=canvas)
         self.base_name = base_name
         self.name = (gltf_material["name"] + (f"@order{order}" if order else "") + ("@base" if ground_base else "")
-                     + ("@solid" if solid_depth else "") + ("@billboard" if billboard else ""))
-        # The name of the glb material slot this variant binds to (the solid companion reuses
-        # the base decal's glb, so it binds to the base variant's slot -- see `solid_variant`).
+                     + ("@solid" if solid_depth else "") + ("@billboard" if billboard else "")
+                     + (f"@r{node_rank}" if node_rank is not None else ""))
+        # The name of the glb material slot this variant binds to (the solid companion's glb
+        # holds the base decal's primitives, so it binds to the base variant's slot -- see
+        # `solid_variant`).
         self.bind_name = self.name
         self.order = order
         self.hud = hud
+        # An overlay sheet drawn across the whole canvas (see `canvas_tag`): only its negative
+        # orders, drawn last without the z-buffer, can leave the box.
+        if canvas and not (hud and order < 0):
+            raise ValueError(f"{self.name}: a canvas-wide brush needs a negative overlay order")
+        self.canvas = canvas
         # The tower base decal (`dno`) draws in its own pass between the opaque world and the
         # translucent tower bodies, so a translucent trunk cannot sort-flip with it; its
         # `solid_depth` companion writes the depth that occludes the tower's underground root.
@@ -76,6 +130,17 @@ class MaterialVariant:
         self.billboard = billboard and bone_count > 0
         self.morph_targets = morph_targets
         self.animmap = animmap
+        # Blitz `LoadAnimTexture` + `EntityTexture(entity, tex, frame)` (the location's river
+        # and border): the first layer samples one frame of an atlas image, tiled over the
+        # brush's UVs; the runtime sets `frame_atlas` = (u, v, width, height) of the frame.
+        self.frame_atlas = frame_atlas
+        # The translucent nodes of a menu sheet or of the menu's world draw in depth layers
+        # (0 = farthest): all their meshes share one origin, so Defold's per-object sort
+        # cannot order them the way Blitz's per-entity sort did (set by the model exporter).
+        # A static overlay (the HUD panel) is ranked node by node (`node_rank`) in layers of
+        # its own, drawn before the sheets that open over it.
+        self.layer_rank: int | None = node_rank
+        self.rank_layer = "panel" if node_rank is not None else "hud" if hud else "world"
         self.blend = int(info.get("blend", BLEND_ALPHA))
         # Models without a sidecar (MD2 monsters) are lit, textured and opaque.
         self.fx = int(info.get("fx", 0 if lit_default else FX_FULLBRIGHT))
@@ -83,10 +148,24 @@ class MaterialVariant:
         self.layers: list[dict] = list(info.get("layers", []))[:MAX_LAYERS]
         if not info and gltf_material.get("pbrMetallicRoughness", {}).get("baseColorTexture") is not None:
             self.layers = [{"flags": 0, "blend": TEX_BLEND_MULTIPLY, "sphere": False, "uri": None, "from_gltf": True}]
+        if ground_base and not self.layers:
+            # `_fpositiontower` paints every base with the location's ground; Icerock's base
+            # brush is untextured, so it gets the ground layer the other towers' bases carry
+            # (the runtime swaps the texture), else it would stay an opaque tinted square.
+            self.layers = [dict(GROUND_BASE_LAYER)]
         factor = gltf_material.get("pbrMetallicRoughness", {}).get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])
         self.color = gltf_color_to_blitz(factor, additive=self.blend == BLEND_ADD)
         self.double_sided = bool(gltf_material.get("doubleSided", False)) or bool(self.fx & FX_NO_CULL)
         layer_alpha = any(int(l.get("flags", 0)) & TEX_FLAG_ALPHA for l in self.layers)
+        # An overlay sheet's alpha-textured plain brush (the menu sign's planks, posts and
+        # captions) also writes the depth of its solid texels, as the Godot port's
+        # `_add_solid_pass`: a caption the sheet's animation moves behind its plank (the
+        # settings flight) is hidden, and the posts behind the planks stay behind them
+        # although they share the planks' brush and so their draw pass.
+        # Sheets drawn with a negative EntityOrder (no z-buffer) take no companion.
+        # A base decal always takes one (see `solid_variant`).
+        self.needs_solid = not solid_depth and (ground_base or (
+            hud and bone_count > 0 and order == 0 and layer_alpha and self.blend == BLEND_ALPHA and self.color[3] >= 1.0))
         self.masked = any(int(l.get("flags", 0)) & TEX_FLAG_MASKED for l in self.layers)
         # Blitz draws a brush opaquely when nothing asks for blending; everything else goes
         # to a blended pass (see godot/addons/b3d_import `_sphere_material`).
@@ -101,30 +180,36 @@ class MaterialVariant:
             self.pass_class = "blend"
         self.mask_threshold = MASK_THRESHOLD
         if self.solid_depth:
-            # The depth-only companion of a base decal (see `solid_variant`): an alpha-scissor
-            # opaque brush that writes depth for the fully-solid texels of the dirt splat, so
-            # the tower's underground root is occluded. Its hard cut sits deep inside the
-            # splat and is covered by the soft blended decal drawn on top (as in the Godot
-            # port's alpha-scissor depth pre-pass), so no hard edge shows against the road.
+            # The depth companion of a base decal or an overlay brush (see `solid_variant`):
+            # an alpha-scissor opaque brush that writes depth for the fully-solid texels (of
+            # the dirt splat: the tower's underground root is occluded). Its hard cut sits
+            # inside the brush and is covered by the soft blended brush drawn on top (as in
+            # the Godot port's alpha-scissor depth pre-pass), so no hard edge shows. The
+            # overlay's companions draw depth only (render_passes `color_write`).
             self.pass_class = "opaque"
             self.masked = True
-            self.mask_threshold = GROUND_BASE_SOLID_ALPHA
+            self.mask_threshold = SOLID_ALPHA
         self.invisible = self.color[3] <= 0.0 and not self.layers
 
     def solid_variant(self) -> "MaterialVariant":
-        """The depth-only companion of this base decal (an alpha-scissor opaque brush)."""
+        """The depth companion of this base decal or overlay brush (an alpha-scissor opaque
+        brush drawing its solid texels)."""
         solid = MaterialVariant(self.base_name + "_solid", self._gltf_material, self._info,
-                                ground_base=True, solid_depth=True, **self._kwargs)
-        solid.bind_name = self.name  # reuses this decal's glb, so binds to its material slot
+                                ground_base=self.ground_base, solid_depth=True, **self._kwargs)
+        solid.bind_name = self.name  # its glb holds this decal's primitives, named after this variant
         return solid
 
     @property
     def tags(self) -> list[str]:
-        if self.hud:
-            return ["hud", self.pass_class]
         if self.ground_base:
             return ["base", self.pass_class]
-        return [f"order_{self.order}", self.pass_class]
+        if self.solid_depth:
+            return [f"{'hud' if self.hud else 'world'}_solid", self.pass_class]
+        if self.layer_rank is not None and self.pass_class != "opaque" and self.order == 0:
+            return [f"{self.rank_layer}_l{self.layer_rank}", self.pass_class]
+        if self.canvas:
+            return [canvas_tag(self.order), self.pass_class]
+        return [order_tag(self.order, self.hud), self.pass_class]
 
     @property
     def lit(self) -> bool:
@@ -140,7 +225,7 @@ class MaterialVariant:
 
     @property
     def needs_view(self) -> bool:
-        return self.lit or self.billboard
+        return self.billboard
 
     def sampler_name(self, layer: int) -> str:
         return f"layer{layer}"
@@ -173,7 +258,9 @@ class MaterialVariant:
         if self.needs_view:
             lines.append("    mediump mat4 mtx_view;")
         if self.lit:
-            lines += ["    mediump vec4 light_dir;", "    mediump vec4 light_color;", "    mediump vec4 ambient;"]
+            lines += ["    mediump vec4 light_dir;", "    mediump vec4 light_color;", "    mediump vec4 ambient;",
+                      "    highp vec4 point_light0;", "    mediump vec4 point_color0;",
+                      "    highp vec4 point_light1;", "    mediump vec4 point_color1;"]
         if self.animmap:
             lines.append("    mediump vec4 uv_offset;")
         if self.skinned:
@@ -188,6 +275,8 @@ class MaterialVariant:
             lines += ["", '#include "/builtins/materials/skinning.glsl"']
         if self.morph_targets:
             lines += ["", "uniform sampler2DArray morph_targets;", ""] + self._morph_functions()
+        if self.lit:
+            lines += [""] + POINT_LIGHT_FUNCTION
         lines += ["", "void main()", "{"]
         if self.skinned:
             lines += ["    vec4 p_local = get_skinned_position(position);", "    vec3 n_local = get_skinned_normal(normal);"]
@@ -245,10 +334,13 @@ class MaterialVariant:
                 lines.append("    vec3 n = normalize((mtx_normal * vec4(n_local, 0.0)).xyz);")
         if self.lit:
             # Direct3D 7 lights per vertex (Gouraud): ambient + Lambert of one directional
-            # light, no specular (Blitz never sets EntityShininess in this game).
+            # light (the locations) and up to two point lights (the menu), no specular
+            # (Blitz never sets EntityShininess in this game).
             lines += [
-                "    vec3 l = normalize((mtx_view * vec4(light_dir.xyz, 0.0)).xyz);",
-                "    var_light = clamp(ambient.rgb + light_color.rgb * max(dot(n, -l), 0.0), 0.0, 1.0);",
+                "    vec3 l = normalize(light_dir.xyz);",
+                "    vec3 lit = ambient.rgb + light_color.rgb * max(dot(n, -l), 0.0);",
+                "    lit += point_light(point_light0, point_color0, p.xyz, n) + point_light(point_light1, point_color1, p.xyz, n);",
+                "    var_light = clamp(lit, 0.0, 1.0);",
             ]
         if self.sphere:
             # gxscene.cpp CANVAS_TEX_SPHERE: uv from the camera-space normal, per vertex.
@@ -317,6 +409,7 @@ class MaterialVariant:
             "    mediump vec4 tint;          // brush colour",
             "    mediump vec4 entity_color;  // Blitz EntityColor: replaces the brush RGB when w > 0",
             "    mediump vec4 entity_alpha;  // Blitz EntityAlpha: x multiplies the alpha",
+        ] + (["    mediump vec4 frame_atlas;   // animated texture frame: uv offset (xy) and size (zw)"] if self.frame_atlas else []) + [
             "};",
             "",
             "// Blitz `TextureBlend` per layer, as in godot/addons/b3d_import (`combine`).",
@@ -325,6 +418,19 @@ class MaterialVariant:
             "vec4 combine_multiply(vec4 acc, vec4 tex) { return acc * tex; }",
             "vec4 combine_multiply2(vec4 acc, vec4 tex) { return acc * tex * vec4(2.0, 2.0, 2.0, 1.0); }",
             "",
+        ]
+        if self.frame_atlas:
+            # The frame repeats over the brush like a texture of its own: wrap inside the
+            # frame, with the gradients of the unwrapped UVs so the wrap seam keeps its mip.
+            lines += [
+                "vec4 sample_frame(sampler2D tex, vec2 uv)",
+                "{",
+                "    vec2 size = frame_atlas.zw;",
+                "    return textureGrad(tex, frame_atlas.xy + fract(uv) * size, dFdx(uv) * size, dFdy(uv) * size);",
+                "}",
+                "",
+            ]
+        lines += [
             "void main()",
             "{",
         ]
@@ -342,7 +448,8 @@ class MaterialVariant:
             uv = "var_sphere_uv" if layer.get("sphere") else ("var_texcoord1" if i > 0 else "var_texcoord0")
             fn = {TEX_BLEND_ALPHA: "combine_alpha", TEX_BLEND_ADD: "combine_add", TEX_BLEND_MULTIPLY2: "combine_multiply2"}.get(
                 int(layer.get("blend", TEX_BLEND_MULTIPLY)), "combine_multiply")
-            lines.append(f"    c = {fn}(c, texture({self.sampler_name(i)}, {uv}));")
+            sample = f"sample_frame({self.sampler_name(i)}, {uv})" if (self.frame_atlas and i == 0) else f"texture({self.sampler_name(i)}, {uv})"
+            lines.append(f"    c = {fn}(c, {sample});")
         lines.append("    c.a *= entity_alpha.x;")
         if self.pass_class == "opaque":
             if self.masked:
@@ -353,7 +460,7 @@ class MaterialVariant:
         lines += ["}", ""]
         return "\n".join(lines)
 
-    def material_file(self, light: dict, materials_path: str) -> str:
+    def material_file(self, materials_path: str) -> str:
         out = [f'name: "{self.base_name}"']
         for tag in self.tags:
             out.append(f'tags: "{tag}"')
@@ -375,13 +482,18 @@ class MaterialVariant:
             out += ["vertex_constants {", '  name: "bone_matrices"', "  type: CONSTANT_TYPE_USER_MATRIX4", "}"]
         user_vs: list[tuple[str, list[float]]] = []
         if self.lit:
-            user_vs += [("light_dir", light["direction"] + [0.0]), ("light_color", light["color"] + [1.0]), ("ambient", light["ambient"] + [1.0])]
+            # The scene light is not baked: the render script passes the current scene's
+            # light in a constant buffer (`LIGHT_CONSTANTS`), shared by every lit material.
+            user_vs += [(name, value) for name, value in NEUTRAL_LIGHT.items()]
         if self.animmap:
             user_vs.append(("uv_offset", [0.0, 0.0, 0.0, 0.0]))
         for name, value in user_vs:
             out += ["vertex_constants {", f'  name: "{name}"', "  type: CONSTANT_TYPE_USER", "  value {",
                     f"    x: {fmt(value[0])}", f"    y: {fmt(value[1])}", f"    z: {fmt(value[2])}", f"    w: {fmt(value[3])}", "  }", "}"]
-        for name, value in (("tint", self.color), ("entity_color", [1.0, 1.0, 1.0, 0.0]), ("entity_alpha", [1.0, 0.0, 0.0, 0.0])):
+        fs_constants = [("tint", self.color), ("entity_color", [1.0, 1.0, 1.0, 0.0]), ("entity_alpha", [1.0, 0.0, 0.0, 0.0])]
+        if self.frame_atlas:
+            fs_constants.append(("frame_atlas", [0.0, 0.0, 1.0, 1.0]))
+        for name, value in fs_constants:
             out += ["fragment_constants {", f'  name: "{name}"', "  type: CONSTANT_TYPE_USER", "  value {",
                     f"    x: {fmt(value[0])}", f"    y: {fmt(value[1])}", f"    z: {fmt(value[2])}", f"    w: {fmt(value[3])}", "  }", "}"]
         for i, layer in enumerate(self.layers):

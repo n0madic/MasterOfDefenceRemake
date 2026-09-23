@@ -1,0 +1,31 @@
+-- The map's storyline (`_fdrawstoryline`): `Storyline.txt[L]` at (470, 420), scale 0.95,
+-- colour (0, 255, 130), each letter fading in at its own random pace, 200 ms after the map
+-- appears.
+local glyph_text = require("main.ui.glyph_text")
+
+local POS = {x = 470, y = 420}
+local SCALE, SPACING = 0.95, 5
+local COLOR = {0, 1, 130 / 255}
+local REVEAL_MIN, REVEAL_MAX = 0.005, 0.015
+local DELAY_TICKS = 13  -- 200 ms at 62.5 ticks per second
+
+function init(self)
+	self.spec = nil
+	self.obj = nil
+	self.delay = DELAY_TICKS
+end
+
+function on_message(self, message_id, message)
+	if message_id == hash("storyline") then
+		self.reveal = glyph_text.new_reveal(message.text, SCALE, SPACING, REVEAL_MIN, REVEAL_MAX)
+		self.spec = {text = message.text, x = POS.x, y = POS.y, color = COLOR, scale = SCALE, spacing = SPACING, letter_alpha = self.reveal.alpha}
+		self.obj = glyph_text.sync(self.obj, self.spec)
+	elseif message_id == hash("tick") and self.spec then
+		if self.delay > 0 then
+			self.delay = self.delay - 1
+			return
+		end
+		glyph_text.step_reveal(self.reveal, 1)
+		self.obj = glyph_text.sync(self.obj, self.spec)
+	end
+end

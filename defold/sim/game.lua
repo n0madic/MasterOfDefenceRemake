@@ -7,6 +7,10 @@ local data = require("sim.data")
 local PathFollower = require("sim.path_follower")
 local Skills = require("sim.skills")
 local balance = require("sim.balance")
+local savegame = require("sim.savegame")
+local profile = require("sim.profile")
+local Balloon = require("sim.balloon")
+local Survival = require("sim.survival")
 
 local f32 = blitz.f32
 
@@ -51,6 +55,8 @@ function M.new(game_data, seed)
 	self.gold, self.lifes, self.experience = 0, 0, 0
 	self.old_lifes, self.extra_lifes = 0, 0
 	self.curlevel, self.location, self.titul = 1, 1, 0
+	self.max_location = 1       -- the furthest location reached (`tvdet` +0x44)
+	self.survival_mode = false
 	self.ingame_time = 0
 	self.create_enemies_mode = false
 	self.level_finished = true
@@ -60,7 +66,8 @@ function M.new(game_data, seed)
 	self.monsters_killed_by_inhabitants = 0
 	self.missed = {}
 	self.skills = Skills.new()
-	self.enemies, self.towers, self.bullets = {}, {}, {}
+	self.enemies, self.towers, self.bullets, self.bombs = {}, {}, {}, {}
+	self.balloon = nil
 	self.selected_tower, self.selected_enemy = nil, nil
 	self.next_id = 1
 	self.tick_count = 0
@@ -101,28 +108,92 @@ function M:reset_protos()
 	end
 end
 
--- `_finitbalancedata` + `_frestartlocation`: a campaign at difficulty `titul` on location `L`.
-function M:start_campaign(titul, L)
+-- Start values per difficulty (`titul`): normal, Hero, Legend.
+M.DIFFICULTY_START = {[0] = {gold = 200, lifes = 100}, [1] = {gold = 200, lifes = 25}, [2] = {gold = 500, lifes = 1}}
+
+-- `_finitbalancedata`: start values for a campaign at difficulty `titul`.
+function M:init_balance(titul)
 	self.titul = titul or 0
-	local start_gold, start_lifes = 200, 100
-	if self.titul == 1 then
-		start_lifes = 25
-	elseif self.titul == 2 then
-		start_lifes, start_gold = 1, 500
-	end
-	self.gold, self.lifes, self.old_lifes = start_gold, start_lifes, start_lifes
+	local start = M.DIFFICULTY_START[self.titul] or M.DIFFICULTY_START[0]
+	self.curlevel = 1
+	self.gold, self.lifes, self.old_lifes = start.gold, start.lifes, start.lifes
 	self.skills:reset()
 	self.experience, self.extra_lifes = 0, 0
 	self.units_life_multiplier = 1.0
 	self.missed = {}
 	self.monsters_killed_by_inhabitants = 0
-	self:enter_location(L or 1)
 end
 
+-- A new campaign at difficulty `titul`, from location `L` (1 unless debugging).
+function M:start_campaign(titul, L)
+	self:init_balance(titul)
+	L = L or 1
+	self.max_location = L
+	self:enter_location(L)
+end
+
+-- `_finitsurvival` + `_frestartgame`: survival on location 2.
+function M:start_survival()
+	self:init_balance(0)
+	self.survival_mode = true
+	self.experience = Survival.START_EXPERIENCE
+	self.gold = Survival.START_GOLD
+	self.lifes, self.old_lifes = Survival.START_LIFES, Survival.START_LIFES
+	self.survival_raids = Survival.make_raids(self.data, self.rng)
+	self.max_location = Survival.LOCATION
+	self:enter_location(Survival.LOCATION)
+end
+
+-- `_fnextlocation`, from the congratulations screen: move to the next location (gold
+-- above 200 hires inhabitants, 100 gold each; the gold is reset; experience bonus).
+-- After the last location the remaining gold and inhabitants become lives, and true is
+-- returned: the campaign is finished. Otherwise also returns the gold spent on hiring and
+-- the inhabitants hired (none: 0, 0) for the map's message.
+function M:next_location()
+	if self.location < data.LOCATIONS then
+		local L = self.location + 1
+		self.max_location = math.max(self.max_location, L)
+		local spent, hired = 0, 0
+		if self.gold > 200 then
+			spent = self.gold - 100
+			hired = blitz.idiv(spent, 100)
+			self.extra_lifes = self.extra_lifes + hired
+		end
+		self.gold = (L == 5 and 250 or 200) + L * 20
+		self.experience = self.experience + L * 10
+		self:enter_location(L)
+		return false, spent, hired
+	end
+	self.lifes = self.lifes + blitz.idiv(self.gold - 100, 100) + self.extra_lifes
+	return true
+end
+
+-- `_fcreatehighscoresmenu`: the score submitted at the end of a campaign converts the gold
+-- above 200 once more (lives). (Survival scores the raid reached.)
+function M:highscore()
+	if self.gold > 200 then
+		self.lifes = self.lifes + blitz.idiv(self.gold - 100, 100)
+	end
+	return self.lifes
+end
+
+-- Load location L (`_floadlocation`): the balloon of the previous one is gone
+-- (`_fdeleteballoon`), locations 4-6 get theirs at their centre (`_fenableballoon`).
 function M:enter_location(L)
 	self.location = L
 	self.path = self.data.paths[L]
+	self.balloon = nil
 	self:restart_location()
+	if self.data:location(L).balloon and not self.survival_mode then
+		self:enable_balloon()
+	end
+end
+
+function M:enable_balloon()
+	if not self.balloon then
+		self.balloon = Balloon.new(self.data:location(self.location).bounds)
+	end
+	self.balloon.enabled = true
 end
 
 function M:restart_location()
@@ -136,7 +207,11 @@ function M:restart_location()
 	for i = #self.bullets, 1, -1 do
 		self:delete_bullet(self.bullets[i], false)
 	end
-	self.curlevel = self.data.location_first_raid[self.location]
+	for _, bomb in ipairs(self.bombs) do
+		self:emit({type = "bomb_removed", bomb = bomb})
+	end
+	self.bombs = {}
+	self.curlevel = self.survival_mode and 1 or self.data.location_first_raid[self.location]
 	self.ingame_time = 0
 	self.create_enemies_mode = false
 	self.level_finished = true
@@ -147,6 +222,9 @@ function M:restart_location()
 end
 
 function M:current_raid()
+	if self.survival_mode then
+		return Survival.raid(self.survival_raids, self.curlevel)
+	end
 	return self.data:raid(self.curlevel)
 end
 
@@ -178,7 +256,9 @@ function M:tick()
 	end
 	self:update_enemies()
 	self:handle_towers()
+	self:handle_balloon()
 	self:update_bullets()
+	self:handle_bombs()
 	for _, t in ipairs(self.towers) do
 		M.update_tower_anim(t)
 	end
@@ -227,6 +307,9 @@ function M:create_enemy(boss, unit_id)
 	e.speed = f32(raid.speed / 10)
 	e.max_life = f32(self.units_life_multiplier * raid.life)
 	e.armor = raid.armor
+	if self.survival_mode and unit.air then
+		e.armor = blitz.round_int(e.armor * Survival.AIR_ARMOR_FACTOR)
+	end
 	e.gold = raid.gold
 	e.air = unit.air
 	e.anim_speed = unit.anim_speed
@@ -400,7 +483,9 @@ function M:delete_enemy(e, killed, check_level)
 	e.id = 0
 	if not e.worker then
 		self.enemies_amount = self.enemies_amount - 1
-		if check_level and self.enemies_amount == 0 then
+		-- A lost game does not finish its raid (the game over sheet stops the game logic):
+		-- no income, no automatic save, no completed location.
+		if check_level and self.enemies_amount == 0 and not self.is_game_over then
 			self:next_level()
 		end
 	end
@@ -410,22 +495,28 @@ end
 function M:next_level()
 	local d = self.data
 	local finished_raid = self.curlevel
-	local hints = {[1] = 53, [3] = 51, [4] = 52}
-	if hints[self.curlevel] then
-		self:message(d:text(hints[self.curlevel]), M.MSG_WHITE, 3000)
-	end
-	if M.DEATH_SAVE_MESSAGE_RAIDS[self.curlevel] then
-		self:message(d:text(50), M.MSG_WHITE, 3000)
-	end
-	if self.curlevel < self:last_raid_of_location() then
+	if self.survival_mode then
 		self.curlevel = self.curlevel + 1
 	else
-		self.location_completed = true
-		self:emit({type = "location_completed"})
+		local hints = {[1] = 53, [3] = 51, [4] = 52}
+		if hints[self.curlevel] then
+			self:message(d:text(hints[self.curlevel]), M.MSG_WHITE, 3000)
+		end
+		if M.DEATH_SAVE_MESSAGE_RAIDS[self.curlevel] then
+			self:message(d:text(50), M.MSG_WHITE, 3000)
+		end
+		if self.curlevel < self:last_raid_of_location() then
+			self.curlevel = self.curlevel + 1
+		else
+			self.location_completed = true
+			self:emit({type = "location_completed"})
+		end
 	end
 	self.level_finished = true
 	self.ingame_time = 0
-	local income = blitz.round_int(self.skills.gold_rate * M.CAMPAIGN_INCOME_BASE)
+	-- Survival pays by the people left, the campaign a fixed base.
+	local base = self.survival_mode and self.lifes or M.CAMPAIGN_INCOME_BASE
+	local income = blitz.round_int(self.skills.gold_rate * base)
 	self.gold = self.gold + income
 	self:message(string.format("%s %d %s", d:text(46), income, d:text(30)), M.MSG_GOLD, 3000)
 	if self.lifes < self.old_lifes then
@@ -438,8 +529,15 @@ function M:next_level()
 		self:sound("nokills")
 	end
 	self.monsters_killed_by_inhabitants = 0
-	self.units_life_multiplier = balance.update(self.units_life_multiplier, self.missed, self.curlevel, self.location, self.titul, self.lifes)
+	if not self.survival_mode then
+		self.units_life_multiplier = balance.update(self.units_life_multiplier, self.missed, self.curlevel, self.location, self.titul, self.lifes)
+	end
 	self.experience = self.experience + M.RAID_EXPERIENCE
+	-- The automatic save of a campaign raid won with no monster left: the snapshot is taken
+	-- here, at the original's moment, and written by the screen controller.
+	if profile.can_autosave(self) then
+		self:emit({type = "autosave", save = savegame.serialize(self)})
+	end
 	for _, t in ipairs(self.towers) do
 		t.stopped = false
 	end
@@ -543,10 +641,12 @@ function M:is_too_close_to_tower(pos)
 end
 
 -- `_fcreatetower` + `_fpositiontower`: a tower placed at `pos`; gold is charged here.
-function M:build_tower(type_id, pos, level)
+-- `_fbuildtower` / `_fcreatetower`: a tower of `type_id` at `level` (0) on `pos`;
+-- `charge == false` builds it for free (restoring a save).
+function M:build_tower(type_id, pos, level, charge)
 	level = level or 0
 	local p = self.protos[type_id][level]
-	if self.gold < p.price then
+	if charge ~= false and self.gold < p.price then
 		self:sound("oops2")
 		return nil
 	end
@@ -566,7 +666,7 @@ function M:build_tower(type_id, pos, level)
 	t.stopped = false
 	t.selected = false
 	M.tower_animate(t, M.ANIM_LOOP, M.tower_idle_seq(t))
-	if not self.cheats then
+	if charge ~= false and not self.cheats then
 		self.gold = self.gold - p.price
 	end
 	self.towers[#self.towers + 1] = t
@@ -731,6 +831,68 @@ function M:handle_towers()
 			else
 				t.target = nil
 			end
+		end
+	end
+end
+
+-- ---------------------------------------------------------------- balloon
+
+M.BOMB_DAMAGE = 350.0
+M.BOMB_FREEZE_PER_COLD = 30
+M.BOMB_FALL_SPEED = 0.2
+M.BOMB_RADIUS = 7.0
+
+-- The right click on the road moves the balloon (`_fhandleballoons` + `_fmoveballoonto`);
+-- false when there is no balloon to move.
+function M:move_balloon(dest)
+	if not (self.balloon and self.balloon.enabled) then
+		return false
+	end
+	self.balloon:move_to(dest)
+	return true
+end
+
+-- `_fhandleballoons`: the balloon moves; a bomb drops when a monster is near and the
+-- timer allows it.
+function M:handle_balloon()
+	local b = self.balloon
+	if not (b and b.enabled) then
+		return
+	end
+	b:update(self.rng)
+	b.timer = b.timer + 1
+	if b.timer <= Balloon.BOMB_INTERVAL_TICKS then
+		return
+	end
+	for _, e in ipairs(self.enemies) do
+		if not e.worker and vec3.distance(e.path.body, b.position) < Balloon.BOMB_TRIGGER_DISTANCE then
+			local bomb = {id = self.next_id, position = {x = b.position.x, y = f32(b.position.y + 1), z = b.position.z},
+				damage = M.BOMB_DAMAGE, freeze = M.BOMB_FREEZE_PER_COLD * self.skills.cold_magic}
+			self.next_id = self.next_id + 1
+			self.bombs[#self.bombs + 1] = bomb
+			b.timer = 0
+			self:emit({type = "bomb_dropped", bomb = bomb})
+			return
+		end
+	end
+end
+
+-- `_fhandlebombs`: a bomb falls 0.2 a tick; on the ground it hits every monster within 7
+-- (inhabitants too) for 350 ignoring armour and freezes them.
+function M:handle_bombs()
+	for i = #self.bombs, 1, -1 do
+		local bomb = self.bombs[i]
+		bomb.position.y = f32(bomb.position.y - f32(M.BOMB_FALL_SPEED))  -- Blitz positions are float32
+		if bomb.position.y <= 0 then
+			for _, e in ipairs(self.enemies) do
+				if vec3.distance(e.path.body, bomb.position) < M.BOMB_RADIUS then
+					e.life = e.life - bomb.damage
+					e.freeze = bomb.freeze
+				end
+			end
+			self:sound("exp1", bomb.position)
+			table.remove(self.bombs, i)
+			self:emit({type = "bomb_removed", bomb = bomb, exploded = true})
 		end
 	end
 end

@@ -119,13 +119,8 @@ local function mul(x, m, divide)
 	return divide and f32(x / m) or f32(x * m)
 end
 
--- `_fupgradetowerbuildingskills` / `_fdowngradetowerbuildingskills`: scale every
--- prototype and built tower by the current upgrader of `kind`.
-function M:_apply(game, kind, divide)
-	local m
-	if kind == M.KIND_RANGE then m = self.range_upgrader
-	elseif kind == M.KIND_SPEED then m = self.speed_upgrader
-	else m = self.damage_upgrader end
+-- Scale every prototype and built tower's `kind` parameter by `m` (or divide by it).
+local function scale_all(game, kind, m, divide)
 	local function scale(p)
 		if kind == M.KIND_RANGE then
 			p.range = mul(p.range, m, divide)
@@ -143,6 +138,36 @@ function M:_apply(game, kind, divide)
 	end
 	for _, t in ipairs(game.towers) do
 		scale(t)  -- towers carry the same field names as the prototypes
+	end
+end
+
+-- `_fupgradetowerbuildingskills` / `_fdowngradetowerbuildingskills`: scale by the current
+-- upgrader of `kind`.
+function M:_apply(game, kind, divide)
+	local m
+	if kind == M.KIND_RANGE then m = self.range_upgrader
+	elseif kind == M.KIND_SPEED then m = self.speed_upgrader
+	else m = self.damage_upgrader end
+	scale_all(game, kind, m, divide)
+end
+
+-- `_fupgradetowerbuildingskills(kind, 1)` after loading a game: replay the multiplier of
+-- every level bought, 1 + inc, 1 + 2 inc, ... on fresh prototypes and the rebuilt towers.
+-- (The original's tower loop for the speed skill multiplies by the final upgrader every
+-- time instead; the prototypes, which every later tower takes, are replayed right.)
+function M:reapply_from_levels(game, kind)
+	local level, step
+	if kind == M.KIND_RANGE then
+		level, step = self.range_level, f32(RANGE_INC)
+	elseif kind == M.KIND_SPEED then
+		level, step = self.speed_level, -f32(SPEED_INC)
+	else
+		level, step = self.damage_level, f32(DAMAGE_INC)
+	end
+	local m = 1.0
+	for _ = 1, level do
+		m = f32(m + step)
+		scale_all(game, kind, m, false)
 	end
 end
 

@@ -2,18 +2,18 @@
 -- entities with a positive EntityOrder first, highest order first, with the z-buffer off;
 -- then the opaque brushes with depth write; then the alpha / additive / multiplied ones
 -- with the depth test only, sorted back to front by Defold (per mesh origin, like Blitz).
--- The pass list comes from generated/level_data.lua; a material's tags name its pass.
-local level = require("generated.level_data")
+-- The pass list comes from generated/render_passes.lua (the union over every scene); a
+-- material's tags name its pass. The current screen sends its background colour and scene
+-- light (`set_scene`); the light reaches every lit material through a constant buffer, so
+-- the shared tower and monster materials take each location's light. A gamma setting other
+-- than 0 draws the frame into a render target and copies it through render/gamma.material.
+local passes = require("generated.render_passes")
+local messages = require("main.messages")
 local screen = require("main.screen")
 
--- The world and the HUD panel keep the original 4:3 framing in a centred box (the gui is
--- fitted into the same box by the engine's ADJUST_FIT, and main/screen.lua maps the mouse
--- into it); the rest of the window stays at the clear colour.
-local function game_viewport(w, h)
-	local s = math.min(w / screen.WIDTH, h / screen.HEIGHT)
-	local vw, vh = math.floor(screen.WIDTH * s), math.floor(screen.HEIGHT * s)
-	return math.floor((w - vw) / 2), math.floor((h - vh) / 2), vw, vh
-end
+-- The world fills the canvas and the overlay (HUD panel, sheets) the 4:3 box of
+-- main/screen.lua (the gui is fitted into the same box by the engine's ADJUST_FIT); the
+-- rest of the window stays at the clear colour.
 
 local BLEND_FUNCS = {
 	blend = {graphics.BLEND_FACTOR_SRC_ALPHA, graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA},
@@ -21,19 +21,56 @@ local BLEND_FUNCS = {
 	mul = {graphics.BLEND_FACTOR_DST_COLOR, graphics.BLEND_FACTOR_ZERO},
 }
 
-local function set_state(pass)
-	if pass.depth_test then
-		render.enable_state(graphics.STATE_DEPTH_TEST)
-	else
-		render.disable_state(graphics.STATE_DEPTH_TEST)
+local GAMMA_LEVELS = 255  -- the gamma ramp's levels: the setting is an offset in them
+-- The lit shaders' point light constants (`point_light<i>`, `point_color<i>`).
+local POINT_LIGHT_KEYS = {"point_light0", "point_light1"}
+local POINT_COLOR_KEYS = {"point_color0", "point_color1"}
+local NO_POINT_LIGHT = vmath.vector4(0, 0, 0, 0)
+local IDENTITY = vmath.matrix4()
+
+-- The state of pass `state`, emitting only what differs from the previous pass's `last`
+-- (nil: everything): the engine's render command buffer holds 1024 commands a frame.
+local function set_state(state, last)
+	if not last or state.depth_test ~= last.depth_test then
+		if state.depth_test then
+			render.enable_state(graphics.STATE_DEPTH_TEST)
+		else
+			render.disable_state(graphics.STATE_DEPTH_TEST)
+		end
 	end
-	render.set_depth_mask(pass.depth_write)
-	local blend = BLEND_FUNCS[pass.blend]
-	if blend then
-		render.enable_state(graphics.STATE_BLEND)
-		render.set_blend_func(blend[1], blend[2])
-	else
-		render.disable_state(graphics.STATE_BLEND)
+	if not last or state.depth_write ~= last.depth_write then
+		render.set_depth_mask(state.depth_write)
+	end
+	if not last or state.color_write ~= last.color_write then
+		render.set_color_mask(state.color_write, state.color_write, state.color_write, state.color_write)
+	end
+	if not last or state.blend ~= last.blend then
+		local blend = BLEND_FUNCS[state.blend]
+		if blend then
+			if not (last and BLEND_FUNCS[last.blend]) then
+				render.enable_state(graphics.STATE_BLEND)
+			end
+			render.set_blend_func(blend[1], blend[2])
+		else
+			render.disable_state(graphics.STATE_BLEND)
+		end
+	end
+end
+
+-- `overlay` ({box, canvas, box_projection, canvas_projection}): the overlay's passes switch
+-- between the 4:3 box and the whole canvas (a pass's `canvas`); the caller set the box.
+local function draw_passes(list, options, overlay)
+	local last
+	for _, pass in ipairs(list) do
+		local state = pass.state
+		set_state(state, last)
+		if overlay and state.canvas ~= (last ~= nil and last.canvas) then
+			local rect = state.canvas and overlay.canvas or overlay.box
+			render.set_viewport(rect.x, rect.y, rect.w, rect.h)
+			render.set_projection(state.canvas and overlay.canvas_projection or overlay.box_projection)
+		end
+		render.draw(pass.predicate, options)
+		last = state
 	end
 end
 
@@ -45,22 +82,181 @@ local function make_passes(list)
 	return out
 end
 
-function init(self)
-	self.passes = make_passes(level.passes)
-	-- The HUD panel hangs on the camera and is drawn over a cleared depth buffer.
-	self.hud_passes = make_passes(level.hud_passes)
-	self.gui_predicate = render.predicate({"gui"})
-	self.text_predicate = render.predicate({"text"})
-	self.gui_projection = vmath.matrix4()
-	-- The HUD panel is drawn by a fixed camera at the origin (matching camera.go: fov 0.8173,
-	-- 4:3, near 0.5, far 600) so it never moves with the scrolling world camera.
-	self.hud_projection = vmath.matrix4_perspective(0.8173, 4 / 3, 0.5, 600)
-	local c = level.clear_color
+local function set_clear_color(self, color)
 	self.clear_buffers = {
-		[graphics.BUFFER_TYPE_COLOR0_BIT] = vmath.vector4(c[1], c[2], c[3], 1),
+		[graphics.BUFFER_TYPE_COLOR0_BIT] = color,
 		[graphics.BUFFER_TYPE_DEPTH_BIT] = 1,
 		[graphics.BUFFER_TYPE_STENCIL_BIT] = 0,
 	}
+end
+
+function init(self)
+	self.passes = make_passes(passes.world)
+	-- The HUD panel hangs on the camera and is drawn over a cleared depth buffer.
+	self.hud_passes = make_passes(passes.hud)
+	-- The scene light of the lit materials (`light_dir`, `light_color`, `ambient`, point
+	-- lights), its direction and positions in the view space of the screen's camera: the
+	-- world and the overlay (whose fixed camera is that view space: a sheet hangs on the
+	-- camera in the original) share it.
+	self.constants = render.constant_buffer()
+	self.light_dir = vmath.vector4(0, -1, 0, 0)  -- world space
+	self.points = {}  -- {key, position (world, w = range)} of the scene's point lights
+	self.draw_options = {constants = self.constants}
+	self.camera_options = {use_frustum = false}
+	self.depth_clear = {[graphics.BUFFER_TYPE_DEPTH_BIT] = 1}
+	self.gui_predicate = render.predicate({"gui"})
+	self.text_predicate = render.predicate({"text"})
+	self.gui_projection = vmath.matrix4_orthographic(0, screen.WIDTH, 0, screen.HEIGHT, -1, 1)
+	-- The HUD panel is drawn by a fixed camera at the origin (matching camera.go: fov,
+	-- 4:3, near 0.5, far 600) so it never moves with the scrolling world camera.
+	self.hud_projection = vmath.matrix4_perspective(screen.FOV, screen.ASPECT, 0.5, 600)
+	-- The same camera over the whole canvas (same height, so the box part is unchanged).
+	self.overlay = {box_projection = self.hud_projection}
+	set_clear_color(self, vmath.vector4(0, 0, 0, 1))
+	-- The gamma setting (`_fsetgammaintensity`, -100..100): while it is not 0 the frame is
+	-- drawn into `self.frame` and copied to the window with the offset added.
+	self.gamma = 0
+	self.gamma_predicate = render.predicate({"gamma"})
+	self.gamma_constants = render.constant_buffer()
+end
+
+function on_message(self, message_id, message)
+	if message_id == messages.SET_DISPLAY then
+		screen.wide = message.wide
+		self.gamma = message.gamma or 0
+		self.gamma_constants.gamma_offset = vmath.vector4(self.gamma / GAMMA_LEVELS, self.gamma / GAMMA_LEVELS, self.gamma / GAMMA_LEVELS, 0)
+	elseif message_id == messages.SET_SCENE then
+		screen.max_aspect = message.max_aspect or screen.ASPECT
+		set_clear_color(self, message.clear_color)
+		self.light_dir = message.light_dir
+		self.constants.light_color = message.light_color
+		self.constants.ambient = message.ambient
+		-- Point lights (`point_light<i>` = world position + range, absent = none).
+		self.points = {}
+		for i, key in ipairs(POINT_LIGHT_KEYS) do
+			local light = message[key]
+			if light then
+				self.points[#self.points + 1] = {key = key, position = light}
+			end
+			self.constants[key] = NO_POINT_LIGHT
+			self.constants[POINT_COLOR_KEYS[i]] = message[POINT_COLOR_KEYS[i]] or NO_POINT_LIGHT
+		end
+	end
+end
+
+-- The frame's render target while the gamma is not 0 (window-sized, with the depth and the
+-- stencil the world and the gui need), or nil.
+local function frame_target(self, width, height)
+	if self.gamma == 0 then
+		if self.frame then
+			render.delete_render_target(self.frame)
+			self.frame = nil
+		end
+		return nil
+	end
+	if not self.frame then
+		self.frame = render.render_target("frame", {
+			[graphics.BUFFER_TYPE_COLOR0_BIT] = {format = graphics.TEXTURE_FORMAT_RGBA, width = width, height = height,
+				min_filter = graphics.TEXTURE_FILTER_NEAREST, mag_filter = graphics.TEXTURE_FILTER_NEAREST,
+				u_wrap = graphics.TEXTURE_WRAP_CLAMP_TO_EDGE, v_wrap = graphics.TEXTURE_WRAP_CLAMP_TO_EDGE},
+			[graphics.BUFFER_TYPE_DEPTH_BIT] = {format = graphics.TEXTURE_FORMAT_DEPTH, width = width, height = height},
+			[graphics.BUFFER_TYPE_STENCIL_BIT] = {format = graphics.TEXTURE_FORMAT_STENCIL, width = width, height = height},
+		})
+		self.frame_size = {width, height}
+	elseif self.frame_size[1] ~= width or self.frame_size[2] ~= height then
+		render.set_render_target_size(self.frame, width, height)
+		self.frame_size = {width, height}
+	end
+	return self.frame
+end
+
+-- The frame copied to the window through the gamma quad (render/gamma.material).
+local function apply_gamma(self, width, height)
+	render.set_render_target(render.RENDER_TARGET_DEFAULT)
+	render.set_viewport(0, 0, width, height)
+	render.set_view(IDENTITY)
+	render.set_projection(IDENTITY)
+	render.disable_state(graphics.STATE_DEPTH_TEST)
+	render.disable_state(graphics.STATE_CULL_FACE)
+	render.disable_state(graphics.STATE_BLEND)
+	render.disable_state(graphics.STATE_STENCIL_TEST)
+	render.enable_texture("frame", self.frame, graphics.BUFFER_TYPE_COLOR0_BIT)
+	render.draw(self.gamma_predicate, {constants = self.gamma_constants})
+	render.disable_texture("frame")
+end
+
+-- The world (canvas) and the overlay (box) through the screen's camera.
+local function draw_scene(self, cam, canvas, box)
+	render.set_viewport(canvas.x, canvas.y, canvas.w, canvas.h)
+	-- The screen's camera with the canvas's aspect (its projection is also what the
+	-- scripts project with). No frustum culling: a bone-posed model's bounding box is that
+	-- of its joint-local vertices, not of the pose (the menu sky, parented to the flying
+	-- camera, was culled).
+	camera.set_aspect_ratio(cam, canvas.w / canvas.h)
+	render.set_camera(cam, self.camera_options)
+	local view = camera.get_view(cam)
+	self.constants.light_dir = view * self.light_dir
+	for _, point in ipairs(self.points) do
+		local p = point.position
+		local v = view * vmath.vector4(p.x, p.y, p.z, 1)
+		self.constants[point.key] = vmath.vector4(v.x, v.y, v.z, p.w)
+	end
+
+	render.enable_state(graphics.STATE_CULL_FACE)
+	render.set_cull_face(graphics.FACE_TYPE_BACK)
+	render.set_depth_func(graphics.COMPARE_FUNC_LEQUAL)
+	draw_passes(self.passes, self.draw_options)
+	render.set_depth_mask(true)
+	render.clear(self.depth_clear)
+	-- The HUD panel is a fixed overlay at (0,0,-10): clear the world camera (so set_view /
+	-- set_projection take effect) and draw it with a fixed camera at the origin, so its
+	-- coplanar decals never jitter or sort-flicker while the world camera scrolls.
+	render.set_camera()
+	render.set_viewport(box.x, box.y, box.w, box.h)
+	render.set_view(IDENTITY)
+	render.set_projection(self.hud_projection)
+	local overlay = self.overlay
+	overlay.box, overlay.canvas = box, canvas
+	local aspect = canvas.w / canvas.h
+	if overlay.canvas_aspect ~= aspect then
+		overlay.canvas_aspect = aspect
+		overlay.canvas_projection = vmath.matrix4_perspective(screen.FOV, aspect, 0.5, 600)
+	end
+	draw_passes(self.hud_passes, self.draw_options, overlay)
+	render.set_color_mask(true, true, true, true)
+	render.set_depth_mask(false)
+	render.disable_state(graphics.STATE_DEPTH_TEST)
+	render.disable_state(graphics.STATE_CULL_FACE)
+	render.set_camera()
+end
+
+local function draw_frame(self, window_width, window_height)
+	render.set_depth_mask(true)
+	render.set_color_mask(true, true, true, true)
+	render.set_stencil_mask(0xff)
+	-- The clear covers the viewport only (Vulkan), which is still the last frame's gui box:
+	-- while a screen loads nothing else redraws the canvas outside it (Wide mode showed the
+	-- previous screen beside the Loading plank).
+	render.clear(self.clear_buffers)
+	local canvas, box = screen.layout(window_width, window_height)
+	-- No camera while a screen is being switched: only the gui (the Loading plank) draws.
+	local cameras = camera.get_cameras()
+	if #cameras > 0 then
+		draw_scene(self, cameras[#cameras], canvas, box)
+	end
+
+	-- The gui in the box: its scenes keep their 800x600 reference coordinates
+	-- (`ADJUST_REFERENCE_DISABLED`), mapped onto the box like the overlay.
+	render.set_viewport(box.x, box.y, box.w, box.h)
+	render.set_view(IDENTITY)
+	render.set_projection(self.gui_projection)
+	render.enable_state(graphics.STATE_BLEND)
+	render.set_blend_func(graphics.BLEND_FACTOR_SRC_ALPHA, graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
+	render.enable_state(graphics.STATE_STENCIL_TEST)
+	render.draw(self.gui_predicate)
+	render.draw(self.text_predicate)
+	render.disable_state(graphics.STATE_STENCIL_TEST)
+	render.disable_state(graphics.STATE_BLEND)
 end
 
 function update(self)
@@ -69,50 +265,12 @@ function update(self)
 	if window_width == 0 or window_height == 0 then
 		return
 	end
-	render.set_depth_mask(true)
-	render.set_stencil_mask(0xff)
-	render.clear(self.clear_buffers)
-	render.set_viewport(game_viewport(window_width, window_height))
-
-	local cameras = camera.get_cameras()
-	if #cameras == 0 then
-		return
+	local target = frame_target(self, window_width, window_height)
+	if target then
+		render.set_render_target(target)
 	end
-	render.set_camera(cameras[#cameras], {use_frustum = true})
-
-	render.enable_state(graphics.STATE_CULL_FACE)
-	render.set_cull_face(graphics.FACE_TYPE_BACK)
-	render.set_depth_func(graphics.COMPARE_FUNC_LEQUAL)
-	for _, pass in ipairs(self.passes) do
-		set_state(pass.state)
-		render.draw(pass.predicate)
+	draw_frame(self, window_width, window_height)
+	if target then
+		apply_gamma(self, window_width, window_height)
 	end
-	render.set_depth_mask(true)
-	render.clear({[graphics.BUFFER_TYPE_DEPTH_BIT] = 1})
-	-- The HUD panel is a fixed overlay at (0,0,-10): clear the world camera (so set_view /
-	-- set_projection take effect) and draw it with a fixed camera at the origin, so its
-	-- coplanar decals never jitter or sort-flicker while the world camera scrolls.
-	render.set_camera()
-	render.set_view(vmath.matrix4())
-	render.set_projection(self.hud_projection)
-	for _, pass in ipairs(self.hud_passes) do
-		set_state(pass.state)
-		render.draw(pass.predicate)
-	end
-	render.set_depth_mask(false)
-	render.disable_state(graphics.STATE_DEPTH_TEST)
-	render.disable_state(graphics.STATE_CULL_FACE)
-	render.set_camera()
-
-	-- GUI in window pixels (the engine has already fitted the nodes into the game box).
-	render.set_viewport(0, 0, window_width, window_height)
-	render.set_view(vmath.matrix4())
-	render.set_projection(vmath.matrix4_orthographic(0, window_width, 0, window_height, -1, 1))
-	render.enable_state(graphics.STATE_BLEND)
-	render.set_blend_func(graphics.BLEND_FACTOR_SRC_ALPHA, graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
-	render.enable_state(graphics.STATE_STENCIL_TEST)
-	render.draw(self.gui_predicate)
-	render.draw(self.text_predicate)
-	render.disable_state(graphics.STATE_STENCIL_TEST)
-	render.disable_state(graphics.STATE_BLEND)
 end

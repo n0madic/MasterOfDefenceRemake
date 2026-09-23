@@ -35,11 +35,14 @@ FIXED_REGIONS = {
     "textbox": (128, 32, 64, 32),
     "checkbox_off": (192, 32, 16, 16),
     "checkbox_on": (192, 48, 16, 16),
+    "radio_off": (192, 0, 16, 16),
+    "radio_on": (192, 16, 16, 16),
 }
 
 
-def export_hud_atlas(gui_png: Path, out_dir: Path) -> list[str]:
-    """Write `assets/hud/*.png` and `assets/hud/hud.atlas`; returns the image names."""
+def export_hud_atlas(gui_png: Path, out_dir: Path, extra: dict[str, Path] | None = None) -> list[str]:
+    """Write `assets/hud/*.png` and `assets/hud/hud.atlas`; returns the image names.
+    `extra`: whole images added under their name (e.g. the Loading.png plank)."""
     atlas = Image.open(gui_png).convert("RGBA")
     images_dir = out_dir / "assets" / "hud"
     images_dir.mkdir(parents=True, exist_ok=True)
@@ -58,6 +61,9 @@ def export_hud_atlas(gui_png: Path, out_dir: Path) -> list[str]:
     names = []
     for name, (x, y, w, h) in regions.items():
         atlas.crop((x, y, x + w, y + h)).save(images_dir / f"{name}.png")
+        names.append(name)
+    for name, path in (extra or {}).items():
+        Image.open(path).convert("RGBA").save(images_dir / f"{name}.png")
         names.append(name)
     lines = []
     for name in names:

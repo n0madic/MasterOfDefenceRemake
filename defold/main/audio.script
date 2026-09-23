@@ -1,0 +1,63 @@
+-- Sounds and music (`_fplaysound`, `_fstartbackgroundmusic`): every sound is a component of
+-- the generated `sounds` game object; screens post `play_sound` / `play_music` here. The
+-- volume settings are the gains of the `music` and `sfx` sound groups.
+local messages = require("main.messages")
+local log = require("main.log")
+
+local SOUNDS = "sounds"
+local GROUP_MUSIC, GROUP_SFX = hash("music"), hash("sfx")
+
+local function play(self, name)
+	local ok, err = pcall(sound.play, msg.url(nil, SOUNDS, name))
+	if not ok and not self.missing[name] then
+		self.missing[name] = true
+		log.warn("audio", "cannot play %s: %s", name, tostring(err))
+	end
+	return ok
+end
+
+function init(self)
+	self.missing = {}
+	self.music = nil
+	self.played = {}  -- sounds started this frame
+	self.loops = {}   -- ambient loops playing
+end
+
+function update(self)
+	self.played = {}
+end
+
+function on_message(self, message_id, message)
+	if message_id == messages.PLAY_SOUND then
+		-- A frame of fast-forwarded ticks can fire the same shot sound dozens of times;
+		-- one start per frame sounds the same and keeps the voice pool free.
+		if not self.played[message.name] then
+			self.played[message.name] = true
+			play(self, message.name)
+		end
+	elseif message_id == messages.PLAY_MUSIC then
+		if self.music == message.name then
+			return
+		end
+		if self.music then
+			sound.stop(msg.url(nil, SOUNDS, self.music))
+		end
+		self.music = play(self, message.name) and message.name or nil
+	elseif message_id == messages.PLAY_LOOP then
+		if not self.loops[message.name] and play(self, message.name) then
+			self.loops[message.name] = true
+		end
+	elseif message_id == messages.SET_LOOP_GAIN then
+		if self.loops[message.name] then
+			sound.set_gain(msg.url(nil, SOUNDS, message.name), message.gain)
+		end
+	elseif message_id == messages.STOP_LOOPS then
+		for name in pairs(self.loops) do
+			sound.stop(msg.url(nil, SOUNDS, name))
+		end
+		self.loops = {}
+	elseif message_id == messages.SET_VOLUMES then
+		sound.set_group_gain(GROUP_MUSIC, message.music)
+		sound.set_group_gain(GROUP_SFX, message.sound)
+	end
+end

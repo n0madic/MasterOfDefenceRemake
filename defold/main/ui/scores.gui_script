@@ -1,0 +1,47 @@
+-- The texts of the score sheet (the campaign's ending, the survival's end over its location):
+-- "Your score is: N" (text 74) in gold and the two local top-10 tables (campaign, survival)
+-- laid out inside the sheet's frame, where the original showed the online table.
+local glyph_text = require("main.ui.glyph_text")
+local session = require("main.session")
+local storage = require("main.storage")
+local profile = require("sim.profile")
+
+local SCORE_POS = {x = 250, y = 177}
+local SCORE_SCALE = 1.3
+local TABLE_Y = 195
+local TABLE_LINE = 13
+local TABLE_ROWS = 10
+local TABLES = {{key = "campaign", title = "Campaign", x = 185}, {key = "survival", title = "Survival", x = 415}}
+local COLOR_GOLD = {1, 203 / 255, 0}
+local COLOR_TITLE = {0, 200 / 255, 120 / 255}
+local COLOR_ROW = {247 / 255, 232 / 255, 172 / 255}
+
+local function text(s, x, y, color, scale, spacing)
+	glyph_text.sync(nil, {text = s, x = x, y = y, color = color, scale = scale, spacing = spacing or 5})
+end
+
+function init(self)
+	-- Over the location's HUD.
+	gui.set_render_order(1)
+end
+
+function on_message(self, message_id, message)
+	if message_id ~= hash("scores") then
+		return
+	end
+	if message.score >= 0 then
+		text(session.data:text(74) .. message.score, SCORE_POS.x, SCORE_POS.y, COLOR_GOLD, SCORE_SCALE)
+	end
+	local tables = storage.read(session.HIGHSCORES) or profile.new_highscores()
+	for _, t in ipairs(TABLES) do
+		text(t.title, t.x, TABLE_Y, COLOR_TITLE, 0.8, 6)
+		local y = TABLE_Y + TABLE_LINE
+		for i, row in ipairs(tables[t.key] or {}) do
+			if i > TABLE_ROWS then
+				break
+			end
+			text(string.format("%2d. %s - %d", i, row.name, row.score), t.x, y, COLOR_ROW, 0.7, 6)
+			y = y + TABLE_LINE
+		end
+	end
+end

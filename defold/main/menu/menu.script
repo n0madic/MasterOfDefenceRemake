@@ -1,0 +1,283 @@
+-- The main menu (`_floadmenu` / `_fshowmenu`, docs/09): the `env` castle scene seen through
+-- the animated camera of `cameraEnv`, the `buttons` sheet with the difficulty sub-menu
+-- (`playgame`), the credits sheet and the loading sheet that plays before a game starts.
+-- The settings flight moves the camera into the settings view (the options widgets come
+-- with the settings screen).
+local session = require("main.session")
+local messages = require("main.messages")
+local render_scene = require("main.render_scene")
+local screen = require("main.screen")
+local storage = require("main.storage")
+local Ticker = require("main.ticker")
+local model = require("main.views.model")
+local MenuScene = require("main.ui.menu_scene")
+local menus = require("generated.menus")
+local profile = require("sim.profile")
+local config = require("main.config")
+
+-- The title plank per unlocked difficulty (`Titul<MenusOpened + MasterFlag>.png`).
+go.property("titul1", resource.texture("/assets/textures/Menu/Titul1.png"))
+go.property("titul2", resource.texture("/assets/textures/Menu/Titul2.png"))
+go.property("titul3", resource.texture("/assets/textures/Menu/Titul3.png"))
+
+local ENV_MODEL, SKY_MODEL = "Menu/env", "Menu/cameraEnv"
+local ENV_SPEED = 0.1
+local CAMERA_SPEED = 0.25
+local SUBMENU_SPEED, SUBMENU_SEQ_STRIDE, SUBMENU_SEQ_FRAMES = 0.5, 8, 6
+local OPTIONS_SHOW_FRAME = 16  -- `_fguioptionsbuttonsvisible` once the flight passed it
+-- In the settings view the main buttons are the widgets' planks; those of the original's
+-- resolution and VSync widgets (gone here) are hidden while the widgets show.
+local UNUSED_OPTION_PLANKS = {"credits", "exit"}
+local CREDITS_SPEED = 0.3
+local LOADING_SPEED, LOADING_FRAMES, LOADING_END = 0.2, 10, 9.9
+local MAIN_ITEMS = {"start", "hardcore", "settings", "credits", "exit", "highscores", "ok"}
+local SUB_ITEMS = {"new", "hard", "insane", "continue"}
+local EXIT_LABEL = "Plane10"  -- the "Exit" caption mesh of buttons.b3d
+local DEMO_ITEMS = {"buynow", "buynow1"}
+local MODE_OF_ITEM = {new = "new", hard = "hard", insane = "insane", continue = "continue", hardcore = "survival"}
+-- Debug (main/config.lua): `menu_script=start,new` activates those items one per
+-- DEBUG_STEP_TICKS without input; `menu_hover=item` keeps the cursor on an item.
+local DEBUG_STEP_TICKS = 60
+
+local function set_scene()
+	local env = menus[ENV_MODEL]
+	-- The sky backdrop spans about 1.8; env.b3d's two omni lights light the world
+	-- (`AmbientLight 0,0,0` in `_floadmenu`: nothing else).
+	render_scene.set({clear_color = env.clear_color, light = env.light, max_aspect = screen.WIDE_MAX_ASPECT})
+end
+
+-- The menu camera at flight frame `t` (the `Camera01` pose of cameraEnv.b3d, lerped).
+local function place_camera(self, t)
+	local pos, rot = model.sample_pose(menus[SKY_MODEL].frames, t, false)
+	go.set_position(pos, "camera")
+	go.set_rotation(rot, "camera")
+	model.set_frame(self.sky, t)
+end
+
+
+local function update_sub_items(self)
+	local opened = session.settings.MenusOpened
+	self.playgame:set_node_visible("hard", opened >= 1)
+	self.playgame:set_node_visible("insane", opened >= 2)
+	self.playgame:set_node_visible("continue", storage.exists(profile.SAVE_AUTOMATIC))
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	self.ticker = Ticker.new()
+	self.mouse = {x = screen.WIDTH / 2, y = screen.HEIGHT / 2}
+	self.env = model.attach(go.get_id("env"), ENV_MODEL)
+	self.sky = model.attach(go.get_id("sky"), SKY_MODEL)
+	self.env_time = 0
+	self.cam_time, self.cam_speed = 0, 0
+	self.cam_length = #menus[SKY_MODEL].frames - 1
+	-- Every sheet carries a cursor of its own (`sel.b3d` copied per menu).
+	self.buttons = MenuScene.new(go.get_id("buttons"), "Menu/buttons", MAIN_ITEMS, go.get_id("sel_buttons"))
+	self.playgame = MenuScene.new(go.get_id("playgame"), "Menu/playgame", SUB_ITEMS, go.get_id("sel_playgame"))
+	self.credits = MenuScene.new(go.get_id("credits"), "Menu/credits", {"ok"}, go.get_id("sel_credits"))
+	self.loading = MenuScene.new(go.get_id("loading"), "Menu/loading", {})
+	-- loading.b3d is modelled in env.b3d's world and `_floadmenu` parents it to the camera
+	-- keeping that pose (`EntityParent ..., 1`) while the camera sits at the flight's first
+	-- frame: in the overlay (the camera's view space) it takes the inverse of that pose.
+	local first_pos, first_rot = model.sample_pose(menus[SKY_MODEL].frames, 0, false)
+	local to_view = vmath.conj(first_rot)
+	go.set_rotation(to_view, "loading")
+	go.set_position(vmath.rotate(to_view, -first_pos), "loading")
+	self.sheets = {self.buttons, self.playgame, self.credits, self.loading}
+	self.playgame:set_visible(false)
+	self.playgame.enabled = false
+	self.credits:set_visible(false)
+	self.credits.enabled = false
+	self.loading:set_visible(false)
+	self.buttons:set_node_visible("ok", false)
+	for _, name in ipairs(DEMO_ITEMS) do
+		self.buttons:set_node_visible(name, false)
+	end
+	if html5 then
+		-- In a browser tab "exit" would mean closing the tab: the button goes.
+		self.buttons:set_node_visible("exit", false)
+		self.buttons:set_node_visible(EXIT_LABEL, false)
+	end
+	-- `_fshowmenu`: the title shows MenusOpened + MasterFlag.
+	self.buttons:set_titul(session.settings.MenusOpened + session.settings.MasterFlag, {self.titul1, self.titul2, self.titul3})
+	update_sub_items(self)
+	self.state = "main"   -- main / settings / credits / loading / done
+	self.sub_open = false
+	self.debug_items = {}
+	for item in config.get_string("menu_script", ""):gmatch("[^,]+") do
+		self.debug_items[#self.debug_items + 1] = item
+	end
+	self.debug_hover = config.get_string("menu_hover", nil)
+	self.debug_ticks = 0
+	set_scene()
+	place_camera(self, 0)
+	msg.post(messages.AUDIO, messages.PLAY_MUSIC, {name = "menu"})
+	msg.post(messages.AUDIO, messages.PLAY_LOOP, {name = "tlen"})
+	msg.post(messages.CONTROLLER, messages.SCREEN_READY)
+end
+
+function final(self)
+	msg.post(messages.AUDIO, messages.STOP_LOOPS)
+end
+
+-- `Animate(playgame, one-shot, +-0.5, MenusOpened + 1)`: sequence `seq` of playgame.b3d is
+-- frames 8 (seq - 1) .. 8 (seq - 1) + 6; closing runs it back to its first frame.
+local function sub_range()
+	local first = SUBMENU_SEQ_STRIDE * session.settings.MenusOpened
+	return first, first + SUBMENU_SEQ_FRAMES
+end
+
+local function open_sub(self)
+	if self.sub_open then
+		return
+	end
+	self.sub_open = true
+	self.playgame:set_visible(true)
+	self.playgame.enabled = true
+	local first, last = sub_range()
+	self.playgame:animate_range(MenuScene.ANIM_ONESHOT, SUBMENU_SPEED, first, last)
+end
+
+local function close_sub(self)
+	if not self.sub_open then
+		return
+	end
+	self.sub_open = false
+	self.playgame.enabled = false
+	local first, last = sub_range()
+	self.playgame:animate_range(MenuScene.ANIM_ONESHOT, -SUBMENU_SPEED, first, last)
+end
+
+-- "settings": the buttons sheet flies away with the camera; only "ok" stays pickable.
+local function set_settings(self, open)
+	self.state = open and "settings" or "main"
+	local speed = open and CAMERA_SPEED or -CAMERA_SPEED
+	self.cam_speed = speed
+	self.buttons:animate(MenuScene.ANIM_ONESHOT, speed)
+	self.buttons:set_node_visible("ok", open)
+	for _, item in ipairs(MAIN_ITEMS) do
+		if item ~= "ok" then
+			self.buttons:set_item_enabled(item, not open)
+		end
+	end
+end
+
+local function set_credits(self, open)
+	self.state = open and "credits" or "main"
+	self.credits:set_visible(open)
+	self.credits.enabled = open
+	self.buttons.enabled = not open
+	msg.post("#gui", "credits", {shown = open})
+	if open then
+		self.credits:animate(MenuScene.ANIM_ONESHOT, CREDITS_SPEED)
+	end
+end
+
+-- A game was chosen: the loading sheet plays, then the controller starts it.
+local function start(self, mode)
+	self.pending_mode = mode
+	self.state = "loading"
+	self.sub_open = false
+	self.buttons.enabled = false
+	self.playgame.enabled = false
+	self.loading:set_visible(true)
+	self.loading:animate_range(MenuScene.ANIM_ONESHOT, LOADING_SPEED, 0, LOADING_FRAMES)
+end
+
+local function on_item(self, name)
+	if self.state == "main" then
+		-- `_fshowmenu`: any other main button folds the open sub-menu first.
+		if name ~= "start" and not MODE_OF_ITEM[name] then
+			close_sub(self)
+		end
+		if name == "start" then
+			open_sub(self)
+		elseif MODE_OF_ITEM[name] then
+			start(self, MODE_OF_ITEM[name])
+		elseif name == "settings" then
+			set_settings(self, true)
+		elseif name == "credits" then
+			set_credits(self, true)
+		elseif name == "highscores" then
+			msg.post(messages.CONTROLLER, messages.SHOW_HIGHSCORES)
+		elseif name == "exit" then
+			msg.post(messages.CONTROLLER, messages.QUIT)
+		end
+	elseif self.state == "settings" and name == "ok" then
+		msg.post("#gui", "options_apply")
+		set_settings(self, false)
+	elseif self.state == "credits" and name == "ok" then
+		set_credits(self, false)
+	end
+end
+
+-- The debug driver: scripted item activations and a forced hover.
+local function debug_tick(self)
+	self.debug_ticks = self.debug_ticks + 1
+	if #self.debug_items > 0 and self.debug_ticks % DEBUG_STEP_TICKS == 0 then
+		on_item(self, table.remove(self.debug_items, 1))
+	end
+end
+
+local function tick(self)
+	debug_tick(self)
+	self.env_time = (self.env_time + ENV_SPEED) % math.max(self.env.meta.frames, 1)
+	model.set_frame(self.env, self.env_time)
+	model.animmaps(self.env, self.env_time)
+	if self.cam_speed ~= 0 then
+		self.cam_time = math.max(0, math.min(self.cam_length, self.cam_time + self.cam_speed))
+		if self.cam_time == 0 or self.cam_time == self.cam_length then
+			self.cam_speed = 0
+		end
+		place_camera(self, self.cam_time)
+	end
+	if self.debug_hover then
+		self.mouse.x, self.mouse.y = self.buttons:screen_point(self.debug_hover)
+	end
+	for _, sheet in ipairs(self.sheets) do
+		sheet:tick(self.mouse.x, self.mouse.y)
+	end
+	local options = self.state == "settings" and self.cam_time >= OPTIONS_SHOW_FRAME
+	if options ~= self.options_shown then
+		self.options_shown = options
+		msg.post("#gui", "options_visible", {shown = options})
+		for _, plank in ipairs(UNUSED_OPTION_PLANKS) do
+			self.buttons:set_node_visible(plank, not options and not (plank == "exit" and html5))
+		end
+	end
+	if self.state == "loading" and self.loading.time > LOADING_END then
+		self.state = "done"
+		msg.post(messages.CONTROLLER, messages.START_GAME, {mode = self.pending_mode})
+	end
+end
+
+function update(self, dt)
+	for _ = 1, self.ticker:advance(dt) do
+		tick(self)
+	end
+end
+
+function on_input(self, action_id, action)
+	if action.x then
+		self.mouse.x, self.mouse.y = screen.mouse(action)
+	end
+	if action_id == hash("click") and action.pressed then
+		for _, sheet in ipairs(self.sheets) do
+			local name = sheet:click(self.mouse.x, self.mouse.y)
+			if name then
+				on_item(self, name)
+				return true
+			end
+		end
+	elseif action_id == hash("quit") and action.pressed then
+		if self.state == "settings" then
+			msg.post("#gui", "options_cancel")
+			set_settings(self, false)
+		elseif self.state == "credits" then
+			set_credits(self, false)
+		elseif self.state == "main" then
+			msg.post(messages.CONTROLLER, messages.QUIT)
+		end
+		return true
+	end
+end

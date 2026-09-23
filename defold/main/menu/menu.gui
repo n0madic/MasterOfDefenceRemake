@@ -1,0 +1,8 @@
+script: "/main/menu/menu.gui_script"
+textures {
+  name: "hud"
+  texture: "/assets/hud/hud.atlas"
+}
+material: "/builtins/materials/gui.material"
+adjust_reference: ADJUST_REFERENCE_DISABLED
+max_nodes: 512

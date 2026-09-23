@@ -1,11 +1,11 @@
 [project]
-title = Master of Defense (Defold experiment)
-version = 0.1
+title = Master of Defense
+version = 1.0
 dependencies#0 = 
 custom_resources = /data,/generated/bones
 
 [bootstrap]
-main_collection = /generated/main.collectionc
+main_collection = /main/main.collectionc
 render = /render/blitz.renderc
 
 [display]
@@ -32,9 +32,21 @@ max_count = 1024
 [collection]
 max_instances = 4096
 
+[resource]
+max_resources = 16384
+
 [sound]
 max_component_count = 64
-max_sound_instances = 64
+max_sound_instances = 128
 
 [shader]
 exclude_gles_sm100 = 1
+
+[collection_proxy]
+max_count = 16
+
+[android]
+package = com.masterofdefense.defold
+
+[ios]
+bundle_identifier = com.masterofdefense.defold

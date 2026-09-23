@@ -1,8 +1,9 @@
 -- Mouse picking (`CameraPick`): a ray from the camera against the build zones (triangle
 -- lists from the exporter), tower boxes and monster spheres / boxes.
+local screen = require("main.screen")
+
 local M = {}
 
-M.FOV = 0.8173  -- vertical, 60 degrees horizontal at 4:3
 M.TOWER_BOX = {x = 2.8, y = 8.4, z = 2.8}
 M.ENEMY_RADIUS = 2.5
 M.AIR_BOX = {x = 3, y = 3, z = 3}
@@ -10,7 +11,7 @@ M.AIR_OFFSET_Y = 3
 
 -- World-space ray through window pixel (x, y) (origin bottom-left) of a `w` x `h` window.
 function M.ray(cam_pos, cam_rot, x, y, w, h)
-	local t = math.tan(M.FOV / 2)
+	local t = math.tan(screen.FOV / 2)
 	local nx = (2 * x / w - 1) * t * (w / h)
 	local ny = (2 * y / h - 1) * t
 	local dir = vmath.normalize(vmath.rotate(cam_rot, vmath.vector3(nx, ny, -1)))
@@ -50,15 +51,26 @@ local function hit_triangle(o, d, ax, ay, az, bx, by, bz, cx, cy, cz)
 	return nil
 end
 
+-- Nearest hit of the ray on a flat triangle list (x1, y1, z1, x2, ...): the ray parameter
+-- (the distance for a unit `d`), or nil.
+function M.hit_triangles(tris, o, d)
+	local best
+	for i = 1, #tris, 9 do
+		local dist = hit_triangle(o, d, tris[i], tris[i + 1], tris[i + 2], tris[i + 3], tris[i + 4], tris[i + 5], tris[i + 6], tris[i + 7], tris[i + 8])
+		if dist and (not best or dist < best) then
+			best = dist
+		end
+	end
+	return best
+end
+
 -- Nearest zone hit: zone name, point, distance.
 function M.pick_zone(zones, o, d)
 	local best, best_zone
 	for zone, tris in pairs(zones) do
-		for i = 1, #tris, 9 do
-			local dist = hit_triangle(o, d, tris[i], tris[i + 1], tris[i + 2], tris[i + 3], tris[i + 4], tris[i + 5], tris[i + 6], tris[i + 7], tris[i + 8])
-			if dist and (not best or dist < best) then
-				best, best_zone = dist, zone
-			end
+		local dist = M.hit_triangles(tris, o, d)
+		if dist and (not best or dist < best) then
+			best, best_zone = dist, zone
 		end
 	end
 	if best then

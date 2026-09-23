@@ -196,6 +196,33 @@ func test_submenu_folds_back_to_its_sequence_start() -> void:
 	cam.queue_free()
 
 
+## `_floadmenu`: loading.b3d is in env.b3d's world and rides with the camera from its
+## first flight frame, so its "Loading..." plank ends up in view in front of the camera
+## (not 10 units ahead of the camera plus its world offset, which put it off screen).
+func test_loading_sheet_keeps_its_world_pose_in_front_of_the_camera() -> void:
+	var cam_scene: Node3D = load(MainMenu.CAMERA_MODEL).instantiate()
+	tree.root.add_child(cam_scene)
+	BlitzAnimator.seek(BlitzAnimator.find_player(cam_scene), 0.0)
+	var cam := Camera3D.new()
+	tree.root.add_child(cam)
+	cam.global_transform = (cam_scene.find_child("Camera01", true, false) as Node3D).global_transform * MainMenu.CAMERA_FIX
+	var m := MenuScene3D.new()
+	m.load_scene(MainMenu.LOADING_MODEL, cam, [])
+	m.enabled = false
+	MainMenu.place_loading(m, cam)
+	m.seek(MainMenu.LOADING_FRAMES)
+	var plank := m.find_node("loading")
+	var p := cam.global_transform.affine_inverse() * plank.global_position
+	check(p.z < 0.0, "the plank is in front of the camera")
+	var half_h := tan(deg_to_rad(cam.fov) / 2.0) * -p.z
+	check(absf(p.y) < half_h and absf(p.x) < half_h * 4.0 / 3.0, "the plank is inside the 4:3 view")
+	var mat := BlitzAnimator.owned_material(plank as MeshInstance3D, 0) as BaseMaterial3D
+	check(mat.no_depth_test, "EntityOrder -6: drawn without the z-buffer")
+	check_eq(mat.render_priority, 6, "after the curtain (order -5)")
+	cam_scene.queue_free()
+	cam.queue_free()
+
+
 ## Detached location screen parts stop listening to the clock at once (quick load,
 ## restart): a tick between `remove_child` and the deferred free must not reach them.
 func test_location_view_and_hud_leave_the_ticker_on_exit() -> void:

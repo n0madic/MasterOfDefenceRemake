@@ -1,0 +1,110 @@
+-- Location camera (docs/03: `_fupdatecamera` / `_fcontrolcamera`): a pivot at height 30
+-- scrolls 1 unit per tick (62.5 ticks/s) inside the location rectangle with the arrow
+-- keys / WASD or the mouse at the window edge; the camera eases towards the pivot by
+-- 1/20 per tick and looks 45 degrees down along -Z. The location screen sends the
+-- location's `bounds` in a `setup` message.
+local screen = require("main.screen")
+local camera_view = require("main.location.camera_view")
+
+local PIVOT_HEIGHT = camera_view.PIVOT_HEIGHT
+local PITCH = camera_view.PITCH
+local TICKS_PER_SECOND = 62.5
+local SCROLL_STEP = 1
+local SMOOTHING = 1 / 20
+local EDGE = 1
+
+local KEY_AXES = {
+	[hash("left")] = {"x", -1},
+	[hash("right")] = {"x", 1},
+	[hash("up")] = {"z", -1},
+	[hash("down")] = {"z", 1},
+}
+
+local MSG_SETUP = hash("setup")
+local MSG_MOVE_TO = hash("move_to")
+local MSG_SCROLL_ENABLED = hash("scroll_enabled")
+local MSG_PAN = hash("pan")
+-- A touch drag of one box pixel moves the pivot this far (the ground seen at the pivot's
+-- distance, 600 box pixels high at the camera's vertical field of view).
+local PAN_UNITS_PER_PIXEL = 2 * (PIVOT_HEIGHT / math.sin(-PITCH)) * math.tan(screen.FOV / 2) / screen.HEIGHT
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	self.bounds = {x_min = 0, x_max = 0, z_min = 0, z_max = 0}
+	self.pivot = vmath.vector3(0, PIVOT_HEIGHT, 0)
+	self.keys = vmath.vector3()
+	self.mouse = vmath.vector3()
+	self.scroll_enabled = true
+	go.set_rotation(vmath.quat_rotation_x(PITCH))
+end
+
+-- The pivot at (x, z), kept inside the bounds; in Wide mode its x range narrows with the
+-- canvas (main/location/camera_view.lua).
+local function place_pivot(self, x, z)
+	local b = self.bounds
+	local canvas = screen.layout(window.get_size())
+	local x_min, x_max = camera_view.x_limits(b, canvas.w / math.max(canvas.h, 1))
+	self.pivot.x = math.min(math.max(x, x_min), x_max)
+	self.pivot.z = math.min(math.max(z, b.z_min), b.z_max)
+end
+
+local function scroll(self, ticks)
+	local dx, dz = 0, 0
+	if self.scroll_enabled then
+		dx = math.max(-1, math.min(1, self.keys.x + self.mouse.x))
+		dz = math.max(-1, math.min(1, self.keys.z + self.mouse.z))
+	end
+	-- Clamped every frame: a resized window can narrow the range under a still pivot.
+	place_pivot(self, self.pivot.x + dx * SCROLL_STEP * ticks, self.pivot.z + dz * SCROLL_STEP * ticks)
+end
+
+function update(self, dt)
+	local ticks = dt * TICKS_PER_SECOND
+	scroll(self, ticks)
+	local pos = go.get_position()
+	local k = 1 - (1 - SMOOTHING) ^ ticks
+	go.set_position(pos + (self.pivot - pos) * k)
+end
+
+-- `_fmovecameratoentity`: the pivot moves behind the entity (towards the camera).
+function on_message(self, message_id, message)
+	if message_id == MSG_SETUP then
+		local b = message.bounds
+		self.bounds = b
+		self.pivot = vmath.vector3((b.x_min + b.x_max) / 2, PIVOT_HEIGHT, (b.z_min + b.z_max) / 2)
+		go.set_position(self.pivot)
+	elseif message_id == MSG_PAN then
+		if self.scroll_enabled then
+			place_pivot(self, self.pivot.x - message.dx * PAN_UNITS_PER_PIXEL, self.pivot.z - message.dy * PAN_UNITS_PER_PIXEL)
+		end
+	elseif message_id == MSG_SCROLL_ENABLED then
+		self.scroll_enabled = message.enabled
+	elseif message_id == MSG_MOVE_TO then
+		place_pivot(self, message.x, message.z + camera_view.MOVE_TO_BEHIND)
+	end
+end
+
+function on_input(self, action_id, action)
+	if action_id == nil then
+		-- Mouse movement (delivered only because the binding has a mouse trigger): Blitz
+		-- scrolls while the cursor touches the screen edge. Outside the window there is
+		-- no cursor to touch it with, so the scrolling stops instead of latching on.
+		local x, y, w, h, inside = screen.canvas_mouse(action)
+		if not inside then
+			self.mouse.x, self.mouse.z = 0, 0
+			return
+		end
+		y = h - y  -- down the screen
+		self.mouse.x = (x <= EDGE) and -1 or ((x >= w - EDGE) and 1 or 0)
+		self.mouse.z = (y <= EDGE) and -1 or ((y >= screen.HEIGHT - EDGE) and 1 or 0)
+		return
+	end
+	local axis = KEY_AXES[action_id]
+	if axis then
+		if action.pressed then
+			self.keys[axis[1]] = axis[2]
+		elseif action.released and self.keys[axis[1]] == axis[2] then
+			self.keys[axis[1]] = 0
+		end
+	end
+end

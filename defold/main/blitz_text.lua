@@ -1,11 +1,13 @@
 -- Layout of Blitz `EText3D` strings (docs/13): 16x16 glyphs of gui.png, glyph = 16*scale
 -- square, advance = (16 - spacing)*scale, the first glyph one advance right of the origin,
--- `\n` moves down 0.8*16*scale, `<colR=nnn><colG=nnn><colB=nnn>` tags change the colour.
+-- `\n` and the `<vd>` tag move down 0.8*16*scale, `<colR=nnn><colG=nnn><colB=nnn>` tags
+-- change the colour.
 local M = {}
 
 M.GLYPH = 16
 M.LINE_FACTOR = 0.8
 local TAG_LENGTH = 10  -- "<colR=nnn>"
+local LINE_TAG = "<vd>"
 
 -- UTF-8 string -> list of cp1251 byte codes (-1 = newline) with colours.
 local function parse(text)
@@ -19,14 +21,18 @@ local function parse(text)
 			local v = (tonumber(text:sub(i + 6, i + 8)) or 0) / 255
 			if channel == "R" then r = v elseif channel == "G" then g = v elseif channel == "B" then b = v end
 			i = i + TAG_LENGTH
-		elseif c == 10 then
+		elseif c == 10 or (c == 60 and text:sub(i, i + #LINE_TAG - 1) == LINE_TAG) then
 			glyphs[#glyphs + 1] = {code = -1}
 			lines[#lines + 1] = line_len
 			line_len = 0
-			i = i + 1
+			i = i + (c == 10 and 1 or #LINE_TAG)
 		else
 			local code, size = c, 1
-			if c >= 0xC0 then
+			local lead_size = c >= 0xF0 and 4 or (c >= 0xE0 and 3 or 2)
+			if c >= 0xC0 and i + lead_size - 1 > n then
+				-- A cut UTF-8 sequence at the end: one unknown glyph.
+				code, size = 63, n - i + 1
+			elseif c >= 0xC0 then
 				-- UTF-8 lead byte: decode the code point, map Cyrillic to cp1251.
 				local cp
 				if c >= 0xF0 then
@@ -100,7 +106,40 @@ function M.line_count(text)
 	for _ in text:gmatch("\n") do
 		n = n + 1
 	end
+	for _ in text:gmatch(LINE_TAG) do
+		n = n + 1
+	end
 	return n
+end
+
+-- UTF-8 by characters (a player's name may be Cyrillic): a character starts at every byte
+-- that is not a continuation byte (10xxxxxx).
+local function starts_char(b)
+	return b < 0x80 or b >= 0xC0
+end
+
+function M.utf8_length(s)
+	local count = 0
+	for i = 1, #s do
+		if starts_char(s:byte(i)) then
+			count = count + 1
+		end
+	end
+	return count
+end
+
+-- The first `n` characters of `s`.
+function M.utf8_head(s, n)
+	local count = 0
+	for i = 1, #s do
+		if starts_char(s:byte(i)) then
+			if count == n then
+				return s:sub(1, i - 1)
+			end
+			count = count + 1
+		end
+	end
+	return s
 end
 
 return M

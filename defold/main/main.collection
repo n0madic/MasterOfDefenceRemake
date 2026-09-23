@@ -1,0 +1,17 @@
+name: "main"
+instances {
+  id: "main"
+  prototype: "/main/controller.go"
+}
+instances {
+  id: "audio"
+  prototype: "/main/audio.go"
+}
+instances {
+  id: "sounds"
+  prototype: "/generated/sounds.go"
+}
+instances {
+  id: "gamma"
+  prototype: "/render/gamma.go"
+}

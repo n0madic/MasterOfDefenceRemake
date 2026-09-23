@@ -111,6 +111,7 @@ func _ready() -> void:
 	credits.scene.visible = false
 	credits.enabled = false
 	loading = make_menu(LOADING_MODEL, [])
+	place_loading(loading, camera)
 	loading.scene.visible = false
 	_setup_titul()
 	buttons.set_item_visible("ok", false)
@@ -167,6 +168,31 @@ func _update_sub_items() -> void:
 ## local +Z (Blitz) as up; in Godot the node's +Y/-Z carry those axes, so the camera
 ## basis is (x, y, z) = (x, -z, y) of the node.
 const CAMERA_FIX := Transform3D(Basis(Vector3(1, 0, 0), Vector3(0, 0, -1), Vector3(0, 1, 0)), Vector3.ZERO)
+
+
+## `_floadmenu`: loading.b3d is modelled in env.b3d's world, not as a sheet; the camera is
+## aligned to cameraEnv's first frame and the sheet parented to it keeping that pose
+## (`EntityParent(loading, camera, 1)`), so it rides with the camera from there. Its nodes
+## get EntityOrder -5 (`fon`, the black curtain) and -6 (`loading`, the plank): drawn over
+## the menu sheets without the z-buffer, the plank last.
+const LOADING_ORDERS := {"fon": -5, "loading": -6}
+
+
+static func place_loading(sheet: MenuScene3D, cam: Camera3D) -> void:
+	sheet.transform = cam.global_transform.affine_inverse()
+	for node_name in LOADING_ORDERS:
+		var mi := sheet.find_node(node_name) as MeshInstance3D
+		if mi == null:
+			push_warning("loading node %s not found" % node_name)
+			continue
+		for s in mi.get_surface_override_material_count():
+			var m := BlitzAnimator.owned_material(mi, s) as BaseMaterial3D
+			m.render_priority = -int(LOADING_ORDERS[node_name])
+			m.no_depth_test = true
+			m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_OPAQUE_ONLY
+			m.next_pass = null
+			if m.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED:
+				m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 
 
 func _align_camera() -> void:

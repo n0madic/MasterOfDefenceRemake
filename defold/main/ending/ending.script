@@ -1,0 +1,75 @@
+-- The end of a campaign (`_floadfinaltitres`, `_fcreatehighscoresmenu`, docs/09): the final
+-- titles (end.b3d), then the score sheet (SendTD) with the local high score tables (the
+-- original sent the score online). Opened from the main menu's "high scores" it shows the
+-- tables only. `session.ending` says what to show: {titles = bool, score = n or nil}. The
+-- survival score sheet hangs over its location (main/location/location.script).
+local session = require("main.session")
+local messages = require("main.messages")
+local render_scene = require("main.render_scene")
+local screen = require("main.screen")
+local Ticker = require("main.ticker")
+local MenuScene = require("main.ui.menu_scene")
+
+local TITLES_SPEED = 0.03
+local SCORES_SPEED = 0.6
+local SEND_PLANKS = {"hs_send", "hs_dont"}  -- the online submission is gone
+
+local function show_scores(self)
+	self.phase = "scores"
+	self.titles:set_visible(false)
+	self.scores:set_visible(true)
+	for _, name in ipairs(SEND_PLANKS) do
+		self.scores:set_node_visible(name, false)
+	end
+	self.scores:animate(MenuScene.ANIM_ONESHOT, SCORES_SPEED)
+	self.texts_shown = false
+end
+
+function init(self)
+	msg.post(".", "acquire_input_focus")
+	self.ticker = Ticker.new()
+	self.mouse = {x = screen.WIDTH / 2, y = screen.HEIGHT / 2}
+	self.ending = session.ending or {}
+	self.titles = MenuScene.new(go.get_id("titles"), "Additional/end", {})
+	self.scores = MenuScene.new(go.get_id("scores"), "Menu/SendTD", {})
+	self.scores:set_visible(false)
+	render_scene.set(render_scene.NEUTRAL)
+	if self.ending.titles then
+		self.phase = "titles"
+		self.titles:animate(MenuScene.ANIM_LOOP, TITLES_SPEED)
+	else
+		show_scores(self)
+	end
+	msg.post(messages.CONTROLLER, messages.SCREEN_READY)
+end
+
+local function tick(self)
+	local sheet = self.phase == "titles" and self.titles or self.scores
+	sheet:tick(self.mouse.x, self.mouse.y)
+	if self.phase == "scores" and not self.texts_shown and not self.scores:animating() then
+		-- `_fhandlehighscoressendmenu` draws the texts once the sheet has flown in.
+		self.texts_shown = true
+		msg.post("#gui", "scores", {score = self.ending.score or -1})
+	end
+end
+
+function update(self, dt)
+	for _ = 1, self.ticker:advance(dt) do
+		tick(self)
+	end
+end
+
+function on_input(self, action_id, action)
+	if action.x then
+		self.mouse.x, self.mouse.y = screen.mouse(action)
+	end
+	if not action_id or not action.pressed then
+		return
+	end
+	if self.phase == "titles" then
+		show_scores(self)
+	else
+		msg.post(messages.CONTROLLER, messages.ENDING_DONE)
+	end
+	return true
+end

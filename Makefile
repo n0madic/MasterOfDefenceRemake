@@ -54,7 +54,7 @@ help: ## Show this help
 	@echo "           DATA_DIR=$(DATA_DIR) BUILD_DIR=$(BUILD_DIR) WEB_PORT=$(WEB_PORT)"
 
 # --- Data pipeline (original assets -> Godot) ----------------------------------------------
-.PHONY: data assets import reimport pipeline defold defold-run
+.PHONY: data assets import reimport pipeline defold defold-run defold-web defold-android
 data: ## Export tables, paths and texts from the unpacked original to godot/data
 	$(PYTHON) tools/export_godot_data.py $(DATA_DIR) $(PROJECT)/data
 
@@ -70,11 +70,17 @@ reimport: ## Drop the import cache and import everything again (after changing a
 
 pipeline: data assets import ## Full pipeline: data + assets + import
 
-defold: ## Export Location1 + entities for the Defold port (defold/, needs godot/assets and data)
-	$(PYTHON) defold/tools/export_defold.py --location 1
+defold: ## Export all locations + entities for the Defold port (defold/, needs godot/assets and data)
+	$(PYTHON) defold/tools/export_defold.py
 
 defold-run: defold ## Build the Defold port with bob and run it (ARGS="--config=main.demo=1")
 	defold/tools/bob.sh run $(ARGS)
+
+defold-web: defold ## Bundle the Defold port for the browser into build/defold-web
+	defold/tools/bob.sh web
+
+defold-android: defold ## Bundle the Defold port as a debug .apk into build/defold-android
+	defold/tools/bob.sh android
 
 # --- Icons ---------------------------------------------------------------------------------
 ICON_PNG := $(PROJECT)/icons/icon_1024.png

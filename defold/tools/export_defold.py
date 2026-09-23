@@ -5,19 +5,22 @@ Reads `godot/assets` (glb models with `.b3d.json` sidecars, textures, sounds) an
 `godot/data` (game tables) and writes into the Defold subproject:
 
 - `assets/models/*.glb`, `generated/materials/*`, `generated/models/*.model`,
-  `generated/go/*.go` -- every model of the location, the towers, bullets, effects, the
-  monsters and the HUD panel (see modexport/models.py);
+  `generated/go/*.go` -- the location scenes, the towers, bullets, effects, the monsters
+  and the HUD panel (see modexport/models.py);
 - `assets/textures/...`, `assets/audio/...` -- the textures and sounds they use;
 - `assets/hud/` -- the GUI atlas cut from `gui.png` (modexport/hud.py);
 - `data/*.json` -- the game tables (custom resources);
-- `generated/level_data.lua` -- camera bounds, background/ambient/light, render passes,
-  the build zones of the location, the gradient of the health bar;
+- `generated/locations/l<N>.lua` (+ the `generated/locations.lua` index) -- per location:
+  camera bounds, background colour, scene light, tower tint, music, build zones;
+- `generated/collections/location<N>.collection` -- a location's scene plus the location
+  screen's game objects (main/location/), loaded by a collection proxy;
+- `generated/render_passes.lua` -- the draw passes, the union over every scene;
+- `generated/common.lua` -- the health bar gradient;
 - `generated/models.lua` -- per model: game object, animation length, groups, ANIMMAP keys;
 - `generated/entities.go` -- one factory per model;
-- `generated/main.collection` -- the bootstrap collection: the location's scene and the
-  level controller with the location's tower ground texture.
+- `generated/sounds.go` -- one sound component per file (groups `music` / `sfx`).
 
-Usage: python3 defold/tools/export_defold.py [--location 1] [--godot godot] [--out defold]
+Usage: python3 defold/tools/export_defold.py [--locations 1 2 ...] [--godot godot] [--out defold]
 """
 from __future__ import annotations
 
@@ -35,17 +38,60 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from gltfwriter import read_accessor  # noqa: E402
 from modexport.hud import export_gradient, export_hud_atlas  # noqa: E402
-from modexport.models import ModelExporter, load_sidecar, transform_point  # noqa: E402
+from b3d2gltf import mat_mul  # noqa: E402
+from modexport.materials import canvas_tag, order_tag  # noqa: E402
+from modexport.models import ModelExporter, load_sidecar, node_matrix, transform_point, unit_normal  # noqa: E402
 
 ZONE_NODES = ["grass", "road", "noparking", "rocks"]
 TOWER_MODELS = ["Military", "Magic", "Nature", "Freeze", "Fire"]
 TOWER_EXTRAS = ["MilitaryPlace", "MagicPlace", "NaturePlace", "FreezePlace", "FirePlace",
                 "MilitaryEff", "MagicEff", "NatureEff", "FreezeEff", "PoisonEff",
-                "range", "selection", "shadow", "death"]
+                "range", "selection", "shadow", "death", "Balloon", "here"]
 BULLET_MODELS = [f"{t}{i}" for t in ("military", "magic", "nature", "freeze") for i in range(1, 6)]
 ROOT_MODELS = ["health", "Env", "faces"]
+HUD_MODELS = ("Env", "faces")
+# The HUD camera in the panel's own space (`MoveEntity(env, 0, 0, 10)`, main/location/world.lua
+# PANEL_OFFSET): the panel's translucent nodes are drawn farthest from it first.
+HUD_PANEL = "Env"
+HUD_PANEL_EYE = (0.0, 0.0, 10.0)
 DATA_FILES = ["units.json", "towers.json", "raids.json", "paths.json", "locations.json", "texts.json", "hud_layout.json"]
+# The 3D menu scenes (`Menu/*.b3d`, docs/09). The sheets hang on the camera 10 units in front
+# of it, so they are drawn by the fixed overlay camera like the HUD panel; they are
+# bone-posed so the runtime can pick, hide and follow their nodes. `node_groups`: nodes
+# whose texture or colour changes at runtime.
+MENU_SHEETS = {
+    "Menu/buttons": ("titul",), "Menu/playgame": (), "Menu/credits": (), "Menu/loading": (), "Menu/sel": (),
+    "Menu/congr": (), "Menu/gameover": (), "Menu/ingame": (), "Menu/music": (), "Menu/sound": (),
+    "Menu/highscores": (), "Menu/Send": (), "Menu/SendTD": (),
+    "Menu/map": ("titul", "point1", "point2", "point3", "point4", "point5", "point6"),
+    "Additional/end": (), "tutorial": (),
+}
+# EntityOrders the game sets at run time (`_floadmenu`): the loading sheet's black
+# curtain and plank are drawn over the menu without the z-buffer.
+SHEET_ORDERS = {"Menu/loading": {"fon": -5, "loading": -6}}
+# Sheets drawn across the whole canvas, not the 4:3 box: the loading curtain rises over the
+# full screen, so in Wide mode it must cover the menu world beside the box too.
+CANVAS_SHEETS = ("Menu/loading",)
+# The main menu's world: the castle scene and the animated camera carrying the sky.
+MENU_WORLD = ["Menu/env"]
+MENU_CAMERA = "Menu/cameraEnv"
+MENU_CAMERA_NODE = "Camera01"
+# B3D Extensions cameras look along the node's local -Y with its +Z up (the Godot port's
+# MainMenu.CAMERA_FIX): camera basis (x, y, z) = node (x, -z, y).
+CAMERA_FIX = [[1.0, 0.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, -1.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
+# Per-location decorations (`_fdecoratelocation`, `_fhandledecorates`): location 1's clock
+# hands (game objects the runtime turns: role -> node), location 2's eagle on its bird path,
+# location 2's water loop at the `door` node (`EmitSound`).
+CLOCK_HANDS = {1: {"hours": "little_arrow", "minutes": "big_arrow", "seconds": "second_arrow"}}
+EAGLE = {2: {"path": "Location1/birdpath1", "node": "piv", "model": "Additional/eagle"}}
+WATER_EMITTER = {2: "door"}
+# Textures no model references that the runtime sets: the menu title per unlocked
+# difficulty, the loading plank.
+RUNTIME_TEXTURES = ["Menu/Titul1.png", "Menu/Titul2.png", "Menu/Titul3.png"]
 SOUND_EXTENSIONS = (".wav", ".ogg")
+# Sound groups (sound.set_group_gain): the music and effects volume settings.
+SOUND_GROUP_MUSIC, SOUND_GROUP_SFX = "music", "sfx"
+LOOPED_SOUNDS = ("tlen", "water")
 
 
 def quat_rotate(q: list[float], v: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -56,66 +102,184 @@ def quat_rotate(q: list[float], v: tuple[float, float, float]) -> tuple[float, f
     return (v[0] + w * tx + (y * tz - z * ty), v[1] + w * ty + (z * tx - x * tz), v[2] + w * tz + (x * ty - y * tx))
 
 
-def normalized(v: tuple[float, float, float]) -> list[float]:
-    n = math.sqrt(sum(c * c for c in v)) or 1.0
-    return [v[0] / n, v[1] / n, v[2] / n]
+# `_fext_initlight` for a B3DEXT_OMNILIGHT tag: CreateLight(2) at the tag's parent, colour
+# `LightColor(x, z, y)` of the tag's position (x255 mod 256, `_fext_linklightcolor`). No
+# scene sets B3DEXT_RANGE, so the range stays Blitz's default (gxlight.cpp `setRange(1000)`).
+OMNILIGHT_TAG = "B3DEXT_OMNILIGHT"
+BLITZ_LIGHT_RANGE = 1000.0
+MAX_POINT_LIGHTS = 2  # the lit shaders' `point_light0` / `point_light1`
+
+
+def point_lights(doc: dict) -> list[dict]:
+    """The scene's omni lights: world position (glTF), range and RGB (0..1)."""
+    nodes = doc["nodes"]
+    parents = {c: i for i, n in enumerate(nodes) for c in n.get("children", [])}
+    out = []
+    for i, node in enumerate(nodes):
+        if not node.get("name", "").startswith(OMNILIGHT_TAG) or i not in parents:
+            continue
+        world = node_matrix(nodes[parents[i]])
+        j = parents[i]
+        while j in parents:
+            j = parents[j]
+            world = mat_mul(node_matrix(nodes[j]), world)
+        # glTF z is Blitz's -z (tools/b3d2gltf.py).
+        x, y, z = node.get("translation", [0.0, 0.0, 0.0])
+        color = [max(0.0, math.fmod(255.0 * c, 256.0)) / 255.0 for c in (x, -z, y)]
+        out.append({"position": list(transform_point(world, (0.0, 0.0, 0.0))), "range": BLITZ_LIGHT_RANGE, "color": color})
+    if len(out) > MAX_POINT_LIGHTS:
+        raise ValueError(f"{len(out)} omni lights, the shaders take {MAX_POINT_LIGHTS}")
+    return out
 
 
 def fmt(v: float) -> str:
     return f"{v:.6f}"
 
 
+WAV_RATE = 44100
+
+
+def needs_resample(wav: Path) -> bool:
+    """A PCM wav below 22 kHz or with 8-bit samples (RIFF header fields)."""
+    with open(wav, "rb") as f:
+        head = f.read(36)
+    if head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+        return False
+    rate = int.from_bytes(head[24:28], "little")
+    bits = int.from_bytes(head[34:36], "little")
+    return rate < 22050 or bits < 16
+
+
+def camera_pose(m) -> tuple[list[float], list[float]]:
+    """Position and rotation quaternion (x, y, z, w) of a row-major matrix, its basis
+    normalized (a camera carries no scale)."""
+    cols = [unit_normal((m[0][c], m[1][c], m[2][c])) for c in range(3)]
+    (m00, m10, m20), (m01, m11, m21), (m02, m12, m22) = cols
+    trace = m00 + m11 + m22
+    if trace > 0:
+        s = math.sqrt(trace + 1.0) * 2
+        q = ((m21 - m12) / s, (m02 - m20) / s, (m10 - m01) / s, 0.25 * s)
+    elif m00 > m11 and m00 > m22:
+        s = math.sqrt(1.0 + m00 - m11 - m22) * 2
+        q = (0.25 * s, (m01 + m10) / s, (m02 + m20) / s, (m21 - m12) / s)
+    elif m11 > m22:
+        s = math.sqrt(1.0 + m11 - m00 - m22) * 2
+        q = ((m01 + m10) / s, 0.25 * s, (m12 + m21) / s, (m02 - m20) / s)
+    else:
+        s = math.sqrt(1.0 + m22 - m00 - m11) * 2
+        q = ((m02 + m20) / s, (m12 + m21) / s, 0.25 * s, (m10 - m01) / s)
+    return [m[0][3], m[1][3], m[2][3]], list(q)
+
+
 def lua_list(values) -> str:
     return "{" + ", ".join(str(v) for v in values) + "}"
 
 
+LOCATIONS = range(1, 7)
+# The location screen's game objects (main/location/), instanced in every location's
+# collection next to its scene.
+# The sheets over a location (congratulations, game over, the survival score sheet) hang on the
+# camera 10 units in front, drawn by the overlay camera.
+SHEET_POSITION = (0.0, 0.0, -10.0)
+LOCATION_SCREEN_OBJECTS = [("controller", "/main/location/location.go", None), ("hud", "/main/location/hud.go", None),
+                           ("camera", "/main/location/camera.go", None),
+                           ("entities", "/generated/entities.go", None),
+                           ("congr", "/generated/go/Menu_congr.go", SHEET_POSITION),
+                           ("gameover", "/generated/go/Menu_gameover.go", SHEET_POSITION),
+                           ("scores", "/generated/go/Menu_Send.go", SHEET_POSITION),
+                           ("sel", "/generated/go/Menu_sel.go", SHEET_POSITION),
+                           ("ingame", "/generated/go/Menu_ingame.go", SHEET_POSITION),
+                           ("ingame_music", "/generated/go/Menu_music.go", SHEET_POSITION),
+                           ("ingame_sound", "/generated/go/Menu_sound.go", SHEET_POSITION),
+                           ("ingame_sel", "/generated/go/Menu_sel.go", SHEET_POSITION),
+                           ("tutorial", "/generated/go/tutorial.go", SHEET_POSITION)]
+
+
+def lua_str(v: str) -> str:
+    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def lua_pose(pos, rot) -> str:
+    return "{pos = {%s}, rot = {%s}}" % (", ".join(fmt(c) for c in pos), ", ".join(fmt(c) for c in rot))
+
+
+def lua_rgb(values) -> str:
+    return "{%s, %s, %s}" % tuple(fmt(c) for c in values)
+
+
 class Exporter:
-    def __init__(self, location: int, godot_dir: Path, out_dir: Path):
-        self.location = location
+    def __init__(self, locations: list[int], godot_dir: Path, out_dir: Path):
+        self.locations = list(locations)
         self.godot = godot_dir
         self.out = out_dir
         self.models_dir = godot_dir / "assets" / "models"
         self.textures_dir = godot_dir / "assets" / "textures"
         self.textures: dict[str, str] = {}
         self.models: dict[str, dict] = {}
-        loc_dir = self.models_dir / f"Location{location}"
-        self.location_glb = loc_dir / f"Location{location}.glb"
-        self.location_sidecar = load_sidecar(self.location_glb) or {}
-        self.light = self._light()
+        self.location_info = json.loads((godot_dir / "data" / "locations.json").read_text())
+        self.pass_tags: set[str] = set()   # the order tag of every material exported
+        self.menus: dict[str, dict] = {}   # menu model key -> pick triangles
+
+    @staticmethod
+    def hand_key(location: int, node: str) -> str:
+        return f"Location{location}/{node}"
+
+    def node_world(self, glb: Path, name: str):
+        """Rest world matrix of node `name` of a scene."""
+        exporter = ModelExporter("probe", glb, load_sidecar(glb), self.out, self.textures_dir)
+        index = exporter.node_index(name)
+        return exporter.world[index]
+
+    def location_glb(self, location: int) -> Path:
+        return self.models_dir / f"Location{location}" / f"Location{location}.glb"
 
     # --- scene light -------------------------------------------------------------------
 
-    def _light(self) -> dict:
-        """Ambient / directional light of the location from the B3DEXT_* tag nodes (the
-        sidecar keeps their raw Blitz positions = RGB values)."""
+    def light(self, location: int) -> dict:
+        return self.scene_light(self.location_glb(location))
+
+    @staticmethod
+    def scene_light(glb: Path) -> dict:
+        """Ambient / directional light and background of a scene from its B3DEXT_* tag nodes
+        (the sidecar keeps their raw Blitz positions = RGB values)."""
         from gltfwriter import read_glb
-        doc, _ = read_glb(self.location_glb)
-        scene = self.location_sidecar.get("scene", {})
+        doc, _ = read_glb(glb)
+        scene = (load_sidecar(glb) or {}).get("scene", {})
         ambient = [float(c) for c in scene.get("B3DEXT_AMBIENT", {}).get("pos", [0.5, 0.5, 0.5])]
         bg = [float(c) for c in scene.get("B3DEXT_BGCOLOR", {}).get("pos", [0.0, 0.0, 0.0])]
         dirlight = scene.get("B3DEXT_DIRLIGHT")
-        color = [1.0, 1.0, 1.0]
-        direction = normalized((-0.5, -0.8, -0.3))
+        # Blitz has no default light: without a B3DEXT_DIRLIGHT the scene is lit by its
+        # ambient and point lights only (the menu).
+        color = [0.0, 0.0, 0.0]
+        direction = unit_normal((-0.5, -0.8, -0.3))
         if dirlight is not None:
             color = [float(c) for c in dirlight["pos"]]
             # `_fext_initlight`: CreateLight(parent) + TurnEntity 90,0,0 -> the light shines
             # along the parent's -Y (see LocationView._setup_lights / MainMenu.CAMERA_FIX).
             holder = next((n for n in doc["nodes"] if n.get("name") == dirlight["parent"]), None)
             if holder is not None:
-                direction = normalized(quat_rotate(holder.get("rotation", [0.0, 0.0, 0.0, 1.0]), (0.0, -1.0, 0.0)))
-        return {"ambient": ambient, "color": color, "direction": direction, "background": bg}
+                direction = unit_normal(quat_rotate(holder.get("rotation", [0.0, 0.0, 0.0, 1.0]), (0.0, -1.0, 0.0)))
+        return {"ambient": ambient, "color": color, "direction": direction, "background": bg,
+                "points": point_lights(doc)}
 
     # --- models --------------------------------------------------------------------------
 
-    def export_model(self, key: str, glb: Path, *, hud: bool = False, lit_default: bool = False) -> dict:
-        exporter = ModelExporter(key, glb, load_sidecar(glb), self.out, self.textures_dir, self.light, hud=hud, lit_default=lit_default)
+    def export_model(self, key: str, glb: Path, **options) -> ModelExporter:
+        exporter = ModelExporter(key, glb, load_sidecar(glb), self.out, self.textures_dir, **options)
         meta = exporter.run()
         self.textures.update(meta.pop("textures"))
         self.models[key] = meta
-        return meta
+        self.pass_tags |= {v.tags[0] for v in exporter.variants.values()}
+        return exporter
 
     def export_models(self) -> None:
-        self.export_model(f"Location{self.location}", self.location_glb)
+        for location in self.locations:
+            hands = CLOCK_HANDS.get(location, {})
+            self.export_model(f"Location{location}", self.location_glb(location), exclude_nodes=tuple(hands.values()))
+            for node in hands.values():
+                self.export_model(self.hand_key(location, node), self.location_glb(location), only_node=node)
+        for eagle in {e["model"] for e in EAGLE.values()}:
+            self.export_model(eagle, self.models_dir / f"{eagle}.glb")
         for name in TOWER_MODELS + TOWER_EXTRAS + BULLET_MODELS:
             self.export_model(f"Towers/{name}", self.models_dir / "Towers" / f"{name}.glb")
         for glb in sorted((self.models_dir / "Monsters").glob("*.glb")):
@@ -124,7 +288,26 @@ class Exporter:
             else:
                 self.export_model(f"Monsters/{glb.stem}", glb, lit_default=True)
         for name in ROOT_MODELS:
-            self.export_model(name, self.models_dir / f"{name}.glb", hud=name in ("Env", "faces"))
+            self.export_model(name, self.models_dir / f"{name}.glb", hud=name in HUD_MODELS,
+                              rank_from=HUD_PANEL_EYE if name == HUD_PANEL else None)
+        self.export_menus()
+
+    def export_menus(self) -> None:
+        for key, groups in MENU_SHEETS.items():
+            exporter = self.export_model(key, self.models_dir / f"{key}.glb", hud=True, posed=True, node_groups=groups,
+                                         node_orders=SHEET_ORDERS.get(key), canvas=key in CANVAS_SHEETS)
+            names = [n["name"] for n in exporter.doc["nodes"] if "mesh" in n and "name" in n]
+            self.menus[key] = {"pick": exporter.pick_triangles(names)}
+        camera = self.export_model(MENU_CAMERA, self.models_dir / f"{MENU_CAMERA}.glb", keep_helpers=True)
+        scene = (load_sidecar(self.models_dir / f"{MENU_CAMERA}.glb") or {}).get("scene", {})
+        fov_h = float(scene.get("B3DEXT_CAMERA", {}).get("pos", [60.0])[0])
+        frames = [camera_pose(mat_mul(m, CAMERA_FIX)) for m in camera.node_world_frames(MENU_CAMERA_NODE)]
+        self.menus[MENU_CAMERA] = {"fov_h": fov_h, "frames": frames}
+        # The world's translucent nodes are ordered as seen from the main menu's camera.
+        for key in MENU_WORLD:
+            glb = self.models_dir / f"{key}.glb"
+            self.export_model(key, glb, posed=True, rank_from=tuple(frames[0][0]))
+            self.menus[key] = {"light": self.scene_light(glb)}
 
     def copy_textures(self) -> None:
         for uri, resource in self.textures.items():
@@ -132,19 +315,29 @@ class Exporter:
             dst.parent.mkdir(parents=True, exist_ok=True)
             src = self.textures_dir / Path(resource).relative_to("/assets/textures")
             shutil.copyfile(src, dst)
+        # Textures swapped in at runtime.
+        for rel in RUNTIME_TEXTURES:
+            dst = self.out / "assets" / "textures" / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(self.textures_dir / rel, dst)
         # Tower bases take the location's ground texture at runtime.
-        for L in range(1, 7):
-            src = self.textures_dir / "Towers" / f"dno{L}.png"
-            if src.exists():
-                dst = self.out / "assets" / "textures" / "Towers" / f"dno{L}.png"
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(src, dst)
+        for location in self.locations:
+            src = self.textures_dir / "Towers" / f"dno{location}.png"
+            dst = self.out / self.ground_texture(location).lstrip("/")
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+
+    @staticmethod
+    def ground_texture(location: int) -> str:
+        """The tower base (`dno`) texture of a location, set by `_fpositiontower`."""
+        return f"/assets/textures/Towers/dno{location}.png"
 
     # --- zones ---------------------------------------------------------------------------
 
-    def zones(self) -> dict[str, list[list[float]]]:
-        """World-space triangles of the build zones of the location (`CameraPick` targets)."""
-        exporter = ModelExporter(f"Location{self.location}", self.location_glb, self.location_sidecar, self.out, self.textures_dir, self.light)
+    def zones(self, location: int) -> dict[str, list[list[float]]]:
+        """World-space triangles of the build zones of a location (`CameraPick` targets)."""
+        glb = self.location_glb(location)
+        exporter = ModelExporter(f"Location{location}", glb, load_sidecar(glb), self.out, self.textures_dir)
         out: dict[str, list[list[float]]] = {}
         nodes = exporter.doc["nodes"]
         for index in exporter.kept:
@@ -177,7 +370,13 @@ class Exporter:
             if src.suffix not in SOUND_EXTENSIONS:
                 continue
             dst = audio_dir / src.name
-            if src.suffix == ".ogg" and ffmpeg:
+            if src.suffix == ".wav" and ffmpeg and needs_resample(src):
+                # Most effects are 8 kHz 8-bit; the engine's mixer upsamples them with no
+                # filtering and they sound harsh (the rebutton hover). ffmpeg's resampler
+                # gives the soft sound the original's DirectSound played.
+                subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", str(src), "-ar", str(WAV_RATE),
+                                "-sample_fmt", "s16", str(dst)], check=True)
+            elif src.suffix == ".ogg" and ffmpeg:
                 # The original's Vorbis streams (remuxed by the Godot pipeline) fail in the
                 # engine's web decoder; a plain re-encode plays everywhere (ffmpeg's own
                 # Vorbis encoder is stereo only).
@@ -189,14 +388,42 @@ class Exporter:
 
     # --- generated Lua / go ----------------------------------------------------------------
 
-    def write_level_data(self) -> None:
-        loc = json.loads((self.godot / "data" / "locations.json").read_text())[str(self.location)]
-        bounds = loc["bounds"]
-        orders = sorted({int(info["order"]) for info in self.location_sidecar.get("nodes", {}).values() if "order" in info and int(info["order"]) > 0}, reverse=True)
-        passes = []
-        for order in orders:
-            for cls in ("opaque", "blend", "add", "mul"):
-                passes.append({"tags": [f"order_{order}", cls], "depth_test": False, "depth_write": False, "blend": cls})
+    def used_orders(self, overlay: bool) -> tuple[list[int], list[int]]:
+        """EntityOrders used by the exported materials of a layer: positive ones highest
+        first, negative ones from -1 down (Blitz draws both with the z-buffer off: the
+        positive before everything, the negative after everything, the lowest last)."""
+        orders = [o for o in range(-99, 100) if o != 0 and (
+            order_tag(o, overlay) in self.pass_tags or (overlay and o < 0 and canvas_tag(o) in self.pass_tags))]
+        return sorted([o for o in orders if o > 0], reverse=True), sorted([o for o in orders if o < 0], reverse=True)
+
+    def layer_passes(self, layer: str) -> list[dict]:
+        """The translucent passes of the depth layers `<layer>_l0`, `<layer>_l1`, ..."""
+        out = []
+        rank = 0
+        while f"{layer}_l{rank}" in self.pass_tags:
+            out += [{"tags": [f"{layer}_l{rank}", cls], "depth_test": True, "depth_write": False, "blend": cls}
+                    for cls in ("blend", "add", "mul")]
+            rank += 1
+        return out
+
+    def write_render_passes(self) -> None:
+        classes = ("opaque", "blend", "add", "mul")
+
+        def unsorted_passes(orders: list[int], overlay: bool) -> list[dict]:
+            # An overlay order's canvas-wide brushes (MaterialVariant.canvas) draw right after
+            # its boxed ones, in the canvas's viewport.
+            out = []
+            for o in orders:
+                tags = [(order_tag(o, overlay), False)]
+                if overlay and o < 0 and canvas_tag(o) in self.pass_tags:
+                    tags.append((canvas_tag(o), True))
+                out += [{"tags": [tag, cls], "depth_test": False, "depth_write": False, "blend": cls, "canvas": canvas}
+                        for tag, canvas in tags for cls in classes]
+            return out
+
+        world_first, world_last = self.used_orders(False)
+        hud_first, hud_last = self.used_orders(True)
+        passes = unsorted_passes(world_first, False)
         # The opaque world writes depth first, then the tower base decals (`dno`) draw on
         # top of it, then the translucent tower bodies. Giving the base its own pass before
         # order_0 blend keeps a translucent trunk from sort-flipping with its own base
@@ -207,36 +434,147 @@ class Exporter:
         passes.append({"tags": ["base", "opaque"], "depth_test": True, "depth_write": True, "blend": "opaque"})
         for cls in ("blend", "add", "mul"):
             passes.append({"tags": ["base", cls], "depth_test": True, "depth_write": False, "blend": cls})
+        # The menu world's translucent nodes in depth layers (MaterialVariant.layer_rank),
+        # farthest first, then the unranked translucent brushes.
+        passes += self.layer_passes("world")
         for cls in ("blend", "add", "mul"):
             passes.append({"tags": ["order_0", cls], "depth_test": True, "depth_write": False, "blend": cls})
-        hud_passes = [{"tags": ["hud", cls], "depth_test": True, "depth_write": cls == "opaque", "blend": cls} for cls in ("opaque", "blend", "add", "mul")]
+        passes += unsorted_passes(world_last, False)
+        hud_passes = unsorted_passes(hud_first, True)
+        # The HUD panel's nodes (MaterialVariant.node_rank), farthest first, under the
+        # portrait and the sheets.
+        hud_passes += self.layer_passes("panel")
+        hud_passes += [{"tags": ["hud", cls], "depth_test": True, "depth_write": cls == "opaque", "blend": cls} for cls in classes]
+        # The sheets' depth companions (MaterialVariant.solid_variant): depth only.
+        hud_passes.append({"tags": ["hud_solid", "opaque"], "depth_test": True, "depth_write": True, "blend": "opaque",
+                           "color_write": False})
+        # The menu sheets' depth layers (MaterialVariant.layer_rank), farthest first.
+        hud_passes += self.layer_passes("hud")
+        hud_passes += unsorted_passes(hud_last, True)
+
+        def pass_lines(name: str, items: list[dict]) -> list[str]:
+            out = [f"M.{name} = {{"]
+            for p in items:
+                out.append("    {tags = {%s}, depth_test = %s, depth_write = %s, color_write = %s, blend = \"%s\", canvas = %s}," % (
+                    ", ".join(f'"{t}"' for t in p["tags"]), str(p["depth_test"]).lower(), str(p["depth_write"]).lower(),
+                    str(p.get("color_write", True)).lower(), p["blend"], str(p.get("canvas", False)).lower()))
+            return out + ["}"]
+
+        lines = ["-- Generated by defold/tools/export_defold.py -- do not edit.",
+                 "-- Draw passes of render/blitz.render_script: the union over every exported scene.", "local M = {}", ""]
+        lines += pass_lines("world", passes) + pass_lines("hud", hud_passes) + ["", "return M", ""]
+        (self.out / "generated" / "render_passes.lua").write_text("\n".join(lines))
+
+    def write_common(self) -> None:
         gradient = export_gradient(self.textures_dir / "Monsters" / "Gradient.bmp", self.out)
-        tint = loc["tower_tint_rgb"]
         lines = ["-- Generated by defold/tools/export_defold.py -- do not edit.", "local M = {}", "",
-                 f"M.location = {self.location}",
-                 "M.bounds = {x_min = %s, x_max = %s, z_min = %s, z_max = %s}" % (bounds["x_min"], bounds["x_max"], bounds["z_min"], bounds["z_max"]),
-                 "M.clear_color = {%s, %s, %s}" % tuple(fmt(c) for c in self.light["background"]),
-                 "M.tower_tint = {%s, %s, %s}" % tuple(fmt(c / 255.0) for c in tint),
-                 f"M.shadows = {'true' if loc.get('shadows', True) else 'false'}",
-                 f"M.music = \"{Path(loc['music']).name}\"",
-                 f"M.first_raid = {loc.get('first_raid', 1)}",
-                 "M.passes = {"]
-        for p in passes:
-            lines.append("    {tags = {%s}, depth_test = %s, depth_write = %s, blend = \"%s\"}," % (
-                ", ".join(f'"{t}"' for t in p["tags"]), str(p["depth_test"]).lower(), str(p["depth_write"]).lower(), p["blend"]))
-        lines += ["}", "M.hud_passes = {"]
-        for p in hud_passes:
-            lines.append("    {tags = {%s}, depth_test = %s, depth_write = %s, blend = \"%s\"}," % (
-                ", ".join(f'"{t}"' for t in p["tags"]), str(p["depth_test"]).lower(), str(p["depth_write"]).lower(), p["blend"]))
-        lines += ["}", "-- Build zones: flat triangle lists (x1, y1, z1, x2, ...) in world space.", "M.zones = {"]
-        for zone, tris in self.zones().items():
-            flat = [v for tri in tris for v in tri]
-            lines.append(f"    {zone} = {lua_list(flat)},")
-        lines += ["}", "-- Health bar colours (Gradient.bmp), index 1..100.", "M.gradient = {"]
-        for rgb in gradient:
-            lines.append("    {%s, %s, %s}," % tuple(fmt(c / 255.0) for c in rgb))
+                 "-- Health bar colours (Gradient.bmp), index 1..100.", "M.gradient = {"]
+        lines += ["    %s," % lua_rgb([c / 255.0 for c in rgb]) for rgb in gradient]
         lines += ["}", "", "return M", ""]
-        (self.out / "generated" / "level_data.lua").write_text("\n".join(lines))
+        (self.out / "generated" / "common.lua").write_text("\n".join(lines))
+
+    def write_location_data(self, location: int) -> None:
+        """generated/locations/l<N>.lua: what the runtime needs to know about a location."""
+        loc = self.location_info[str(location)]
+        light = self.light(location)
+        b = loc["bounds"]
+        lines = ["-- Generated by defold/tools/export_defold.py -- do not edit.", "local M = {}", "",
+                 f"M.location = {location}",
+                 "M.bounds = {x_min = %s, x_max = %s, z_min = %s, z_max = %s}" % (b["x_min"], b["x_max"], b["z_min"], b["z_max"]),
+                 # `_floadlocation`: CameraClsColor (192, 212, 223) on location 6, black elsewhere.
+                 f"M.clear_color = {lua_rgb([c / 255.0 for c in loc['clear_color']])}",
+                 "M.light = {dir = %s, color = %s, ambient = %s}" % (lua_rgb(light["direction"]), lua_rgb(light["color"]), lua_rgb(light["ambient"])),
+                 f"M.tower_tint = {lua_rgb([c / 255.0 for c in loc['tower_tint_rgb']])}",
+                 f"M.shadows = {'true' if loc.get('shadows', True) else 'false'}",
+                 f"M.music = {lua_str(Path(loc['music']).stem)}",
+                 f"M.first_raid = {loc.get('first_raid', 1)}",
+                 "-- Build zones: flat triangle lists (x1, y1, z1, x2, ...) in world space.", "M.zones = {"]
+        for zone, tris in self.zones(location).items():
+            lines.append(f"    {zone} = {lua_list([v for tri in tris for v in tri])},")
+        lines.append("}")
+        hands = CLOCK_HANDS.get(location)
+        if hands:
+            lines.append("-- Clock hands: role -> game object of the location collection.")
+            lines.append("M.clock = {%s}" % ", ".join(f'{role} = "clock_{role}"' for role in hands))
+        eagle = EAGLE.get(location)
+        if eagle:
+            glb = self.models_dir / f"{eagle['path']}.glb"
+            path_exporter = ModelExporter("probe", glb, load_sidecar(glb), self.out, self.textures_dir)
+            frames = [camera_pose(m) for m in path_exporter.node_world_frames(eagle["node"])]
+            lines.append(f"-- The eagle rides node `{eagle['node']}` of {eagle['path']}: pose per frame.")
+            lines.append(f'M.eagle = {{model = "{eagle["model"]}", frames = {{')
+            for pos, rot in frames:
+                lines.append(f"    {lua_pose(pos, rot)},")
+            lines.append("}}")
+        water = WATER_EMITTER.get(location)
+        if water:
+            m = self.node_world(self.location_glb(location), water)
+            lines.append(f"M.water_emitter = {lua_rgb([m[0][3], m[1][3], m[2][3]])}")
+        lines += ["", "return M", ""]
+        path = self.out / "generated" / "locations" / f"l{location}.lua"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines))
+
+    def write_locations_index(self) -> None:
+        """generated/locations.lua: static requires (bob only bundles modules it can see)."""
+        lines = ["-- Generated by defold/tools/export_defold.py -- do not edit.", "return {"]
+        lines += [f'    [{location}] = require("generated.locations.l{location}"),' for location in self.locations]
+        lines += ["}", ""]
+        (self.out / "generated" / "locations.lua").write_text("\n".join(lines))
+
+    def write_location_collection(self, location: int) -> None:
+        """generated/collections/location<N>.collection, loaded by a collection proxy: the
+        location's scene and the location screen's game objects, the controller's
+        `location` and ground texture set as overrides. They are top-level overrides on
+        purpose: bob does not bundle a resource named only by an override inside a nested
+        collection instance."""
+        props = [("location", str(location), "PROPERTY_TYPE_NUMBER"), ("ground_texture", self.ground_texture(location), "PROPERTY_TYPE_HASH")]
+        lines = [f'name: "location{location}"']
+        hands = [(f"clock_{role}", self.models[self.hand_key(location, node)]["go"],
+                  tuple(self.node_world(self.location_glb(location), node)[r][3] for r in range(3)))
+                 for role, node in CLOCK_HANDS.get(location, {}).items()]
+        for ident, prototype, position in [("scene", self.models[f"Location{location}"]["go"], None)] + hands + LOCATION_SCREEN_OBJECTS:
+            lines += ["instances {", f'  id: "{ident}"', f'  prototype: "{prototype}"']
+            if position:
+                lines += ["  position {", f"    x: {position[0]}", f"    y: {position[1]}", f"    z: {position[2]}", "  }"]
+            if ident == "controller":
+                lines += ["  component_properties {", '    id: "script"']
+                for name, value, kind in props:
+                    lines += ["    properties {", f'      id: "{name}"', f'      value: "{value}"', f"      type: {kind}", "    }"]
+                lines.append("  }")
+            lines.append("}")
+        lines += ["scale_along_z: 0", ""]
+        path = self.out / "generated" / "collections" / f"location{location}.collection"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(lines))
+
+    def write_menus_lua(self) -> None:
+        """generated/menus.lua: per menu sheet the pickable nodes (joint, local triangles);
+        the main menu camera's pose per frame (position, rotation) and horizontal fov."""
+        lines = ["-- Generated by defold/tools/export_defold.py -- do not edit.", "local M = {}", ""]
+        for key, menu in self.menus.items():
+            lines.append(f'M["{key}"] = {{')
+            if "pick" in menu:
+                lines.append("    pick = {")
+                for name, item in menu["pick"].items():
+                    lines.append(f'        ["{name}"] = {{joint = {item["joint"]}, tris = {lua_list(item["tris"])}}},')
+                lines.append("    },")
+            if "light" in menu:
+                light = menu["light"]
+                lines.append(f"    clear_color = {lua_rgb(light['background'])},")
+                points = ", ".join("{pos = %s, range = %s, color = %s}" % (lua_rgb(pt["position"]), fmt(pt["range"]), lua_rgb(pt["color"]))
+                                   for pt in light["points"])
+                lines.append("    light = {dir = %s, color = %s, ambient = %s, points = {%s}}," % (
+                    lua_rgb(light["direction"]), lua_rgb(light["color"]), lua_rgb(light["ambient"]), points))
+            if "frames" in menu:
+                lines.append(f"    fov_h = {fmt(menu['fov_h'])},")
+                lines.append("    frames = {")
+                for pos, rot in menu["frames"]:
+                    lines.append(f"        {lua_pose(pos, rot)},")
+                lines.append("    },")
+            lines.append("}")
+        lines += ["", "return M", ""]
+        (self.out / "generated" / "menus.lua").write_text("\n".join(lines))
 
     def write_models_lua(self) -> None:
         lines = ["-- Generated by defold/tools/export_defold.py -- do not edit.", "local M = {}", ""]
@@ -248,6 +586,16 @@ class Exporter:
             if meta.get("bones"):
                 b = meta["bones"]
                 lines.append(f'    bones = {{count = {b["count"]}, frames = {b["frames"]}, resource = "{b["resource"]}"}},')
+            if meta["joints"]:
+                joints = ", ".join(f'["{name}"] = {index}' for name, index in meta["joints"].items() if name)
+                lines.append(f"    joints = {{{joints}}},")
+                lines.append(f"    joint_parents = {lua_list(meta['joint_parents'])},")
+            if meta["frame_atlases"]:
+                lines.append("    frame_atlases = {")
+                for atlas in meta["frame_atlases"]:
+                    lines.append('        {group = "%s", columns = %d, rows = %d, frames = %d, step = %s},' % (
+                        atlas["group"], atlas["columns"], atlas["rows"], atlas["frames"], fmt(atlas["step"])))
+                lines.append("    },")
             if meta["animmaps"]:
                 lines.append("    animmaps = {")
                 for m in meta["animmaps"]:
@@ -273,53 +621,40 @@ class Exporter:
             if stem in seen:
                 continue  # menu.wav / menu.ogg: the component id is the stem
             seen.add(stem)
-            loop = "1" if stem.startswith("music") or stem in ("tlen", "water") else "0"
+            is_music = stem.startswith("music") or stem == "menu"
+            loop = "1" if is_music or stem in LOOPED_SOUNDS else "0"
+            group = SOUND_GROUP_MUSIC if is_music else SOUND_GROUP_SFX
             lines += ["embedded_components {", f'  id: "{stem}"', '  type: "sound"',
-                      f'  data: "sound: \\"/assets/audio/{name}\\"\\nlooping: {loop}\\ngain: 1.0\\n"', "}"]
+                      f'  data: "sound: \\"/assets/audio/{name}\\"\\nlooping: {loop}\\ngroup: \\"{group}\\"\\ngain: 1.0\\n"', "}"]
         (self.out / "generated" / "sounds.go").write_text("\n".join(lines) + "\n")
-
-    def ground_texture(self) -> str:
-        """The tower base (`dno`) texture of the location, set by `_fpositiontower`."""
-        return f"/assets/textures/Towers/dno{self.location}.png"
-
-    def write_main_collection(self) -> None:
-        """The bootstrap collection (game.project `main_collection`): the location's scene and
-        the level controller, whose `ground_texture` script property is the location's."""
-        instances = [("location", self.models[f"Location{self.location}"]["go"], None),
-                     ("entities", "/generated/entities.go", None), ("sounds", "/generated/sounds.go", None),
-                     ("camera", "/main/camera.go", None), ("level", "/main/level.go", ("script", "ground_texture", self.ground_texture()))]
-        lines = ['name: "main"']
-        for ident, prototype, prop in instances:
-            lines += ["instances {", f'  id: "{ident}"', f'  prototype: "{prototype}"']
-            if prop:
-                component, name, value = prop
-                lines += ["  component_properties {", f'    id: "{component}"', "    properties {", f'      id: "{name}"',
-                          f'      value: "{value}"', "      type: PROPERTY_TYPE_HASH", "    }", "  }"]
-            lines.append("}")
-        (self.out / "generated" / "main.collection").write_text("\n".join(lines) + "\n")
 
     def run(self) -> None:
         (self.out / "generated").mkdir(parents=True, exist_ok=True)
         self.export_models()
         self.copy_textures()
         self.copy_data()
-        export_hud_atlas(self.textures_dir / "gui.png", self.out)
-        self.write_level_data()
+        export_hud_atlas(self.textures_dir / "gui.png", self.out, {"loading": self.textures_dir / "Menu" / "Loading.png"})
+        self.write_render_passes()
+        self.write_common()
+        for location in self.locations:
+            self.write_location_data(location)
+            self.write_location_collection(location)
+        self.write_locations_index()
+        self.write_menus_lua()
         self.write_models_lua()
         self.write_entities_go()
         self.write_sounds_go(self.copy_audio())
-        self.write_main_collection()
         skinned = sum(1 for m in self.models.values() if m["skinned"])
         print(f"{len(self.models)} models ({skinned} skinned), {len(self.textures)} textures -> {self.out}")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--location", type=int, default=1)
+    ap.add_argument("--locations", type=int, nargs="+", default=list(LOCATIONS), help="locations to export (default: all)")
     ap.add_argument("--godot", type=Path, default=ROOT / "godot", help="Godot project with converted assets")
     ap.add_argument("--out", type=Path, default=ROOT / "defold", help="Defold project directory")
     args = ap.parse_args()
-    Exporter(args.location, args.godot.resolve(), args.out.resolve()).run()
+    Exporter(args.locations, args.godot.resolve(), args.out.resolve()).run()
 
 
 if __name__ == "__main__":

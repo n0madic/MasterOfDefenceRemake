@@ -4,6 +4,9 @@
 #   defold/tools/bob.sh run [args...]    # build + run dmengine (e.g. --config=main.demo=1)
 #   defold/tools/bob.sh web              # bundle for the browser into build/defold-web
 #   defold/tools/bob.sh mac              # .app bundle into build/defold-mac
+#   defold/tools/bob.sh android          # debug .apk (bob's debug keystore) into build/defold-android
+#   defold/tools/bob.sh ios              # .app for iOS into build/defold-ios; needs IOS_IDENTITY and
+#                                        # IOS_PROVISIONING (a signing identity and .mobileprovision)
 # Environment: DEFOLD_APP (default /Applications/Defold.app), DEFOLD_TOOLS (cache dir for
 # bob.jar / dmengine, default build/defold-tools).
 set -e
@@ -42,5 +45,9 @@ case "$cmd" in
   run) bob --platform "$PLATFORM" --variant debug build && cd "$PROJECT" && exec "$ENGINE" "$@" ;;
   web) bob --platform wasm-web --variant debug --archive --bundle-output "$ROOT/build/defold-web" build bundle ;;
   mac) bob --platform "$PLATFORM" --variant debug --archive --bundle-output "$ROOT/build/defold-mac" build bundle ;;
-  *) echo "usage: $0 build|run|web|mac" >&2; exit 2 ;;
+  android) bob --platform arm64-android --architectures arm64-android --bundle-format apk --variant debug --archive \
+    --bundle-output "$ROOT/build/defold-android" build bundle ;;
+  ios) bob --platform arm64-ios --architectures arm64-ios --variant debug --archive --identity "$IOS_IDENTITY" \
+    --mobileprovisioning "$IOS_PROVISIONING" --bundle-output "$ROOT/build/defold-ios" build bundle ;;
+  *) echo "usage: $0 build|run|web|mac|android|ios" >&2; exit 2 ;;
 esac

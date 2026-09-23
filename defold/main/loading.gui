@@ -1,0 +1,43 @@
+script: "/main/loading.gui_script"
+textures {
+  name: "hud"
+  texture: "/assets/hud/hud.atlas"
+}
+nodes {
+  position {
+    x: 400.0
+    y: 300.0
+  }
+  size {
+    x: 8000.0
+    y: 8000.0
+  }
+  color {
+    x: 0.0
+    y: 0.0
+    z: 0.0
+  }
+  type: TYPE_BOX
+  id: "back"
+  inherit_alpha: true
+  size_mode: SIZE_MODE_MANUAL
+}
+nodes {
+  position {
+    x: 0.0
+    y: 0.0
+  }
+  size {
+    x: 256.0
+    y: 64.0
+  }
+  type: TYPE_BOX
+  texture: "hud/loading"
+  id: "plank"
+  parent: "back"
+  inherit_alpha: true
+  size_mode: SIZE_MODE_MANUAL
+}
+material: "/builtins/materials/gui.material"
+adjust_reference: ADJUST_REFERENCE_DISABLED
+max_nodes: 16

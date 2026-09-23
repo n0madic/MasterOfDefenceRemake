@@ -3,6 +3,7 @@ godot/assets of Location1 (run tools/convert_all.py first)."""
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 import tempfile
 import unittest
@@ -32,7 +33,7 @@ class DefoldExportTests(unittest.TestCase):
         cls.module = load_exporter()
         cls.tmp = tempfile.TemporaryDirectory()
         cls.out = Path(cls.tmp.name)
-        cls.exporter = cls.module.Exporter(1, GODOT_DIR, cls.out)
+        cls.exporter = cls.module.Exporter([1, 6], GODOT_DIR, cls.out)
         cls.exporter.run()
 
     @classmethod
@@ -58,14 +59,19 @@ class DefoldExportTests(unittest.TestCase):
         self.assertNotIn("skins", doc)
         self.assertNotIn("images", doc)
 
-    def test_main_collection_follows_the_location(self) -> None:
-        collection = (self.out / "generated" / "main.collection").read_text()
-        self.assertIn('prototype: "/generated/go/Location1.go"', collection)
-        self.assertIn('id: "ground_texture"', collection)
-        self.assertIn('value: "/assets/textures/Towers/dno1.png"', collection)
-        self.assertTrue((self.out / "assets" / "textures" / "Towers" / "dno1.png").exists())
+    def test_location_collections_set_the_location_and_its_ground(self) -> None:
+        for location in (1, 6):
+            collection = (self.out / "generated" / "collections" / f"location{location}.collection").read_text()
+            self.assertIn(f'name: "location{location}"', collection)
+            self.assertIn(f'prototype: "/generated/go/Location{location}.go"', collection)
+            self.assertIn('prototype: "/main/location/location.go"', collection)
+            self.assertIn(f'value: "{location}"', collection)
+            self.assertIn(f'value: "/assets/textures/Towers/dno{location}.png"', collection)
+            self.assertTrue((self.out / "assets" / "textures" / "Towers" / f"dno{location}.png").exists())
+        index = (self.out / "generated" / "locations.lua").read_text()
+        self.assertIn('[6] = require("generated.locations.l6")', index)
         project = (ROOT / "defold" / "game.project").read_text()
-        self.assertIn("main_collection = /generated/main.collectionc", project)
+        self.assertIn("main_collection = /main/main.collectionc", project)
 
     def test_location_materials_per_brush_and_order(self) -> None:
         doc, _ = self.glb("Location1")
@@ -133,7 +139,7 @@ class DefoldExportTests(unittest.TestCase):
         from b3d2gltf import mat_mul
         import struct
         glb = GODOT_DIR / "assets" / "models" / "Towers" / "Nature.glb"
-        exp = ModelExporter("Towers/Nature", glb, load_sidecar(glb), self.out, self.out, self.exporter.light)
+        exp = ModelExporter("Towers/Nature", glb, load_sidecar(glb), self.out, self.out)
         self.assertTrue(exp.sheared)
         joints = exp._joint_order()
         # A leaf joint really is sheared (which is the whole reason for this path).
@@ -179,7 +185,7 @@ class DefoldExportTests(unittest.TestCase):
         joint-local vertices, exactly as Godot transforms its nodes."""
         from modexport.models import ModelExporter, load_sidecar
         glb = GODOT_DIR / "assets" / "models" / "Towers" / "death.glb"
-        exp = ModelExporter("Towers/death", glb, load_sidecar(glb), self.out, self.out, self.exporter.light)
+        exp = ModelExporter("Towers/death", glb, load_sidecar(glb), self.out, self.out)
         self.assertFalse(exp.sheared)               # not sheared ...
         self.assertTrue(exp._degenerate_scale)      # ... but a degenerate joint scale ...
         self.assertTrue(exp.bone_posed)             # ... so it is bone-posed all the same.
@@ -225,8 +231,6 @@ class DefoldExportTests(unittest.TestCase):
         go = (self.out / "generated" / "go" / "Env.go").read_text()
         self.assertIn('id: "updates"', go)
         self.assertIn('id: "window"', go)
-        material = (self.out / "generated" / "materials" / "Env_0.material").read_text()
-        self.assertIn('tags: "hud"', material)
         death_fps = [(self.out / "generated" / "materials" / f"Towers_death_{i}.fp").read_text() for i in range(4)]
         self.assertTrue(any("var_sphere_uv" in fp for fp in death_fps))
         # The sphere UV is computed in the shader, so it bypasses the V flip Defold applies
@@ -242,7 +246,7 @@ class DefoldExportTests(unittest.TestCase):
         for tower in ("Towers_Nature_2", "Towers_Military_2"):
             material = (self.out / "generated" / "materials" / f"{tower}.material").read_text()
             self.assertIn('tags: "base"', material)
-        data = (self.out / "generated" / "level_data.lua").read_text()
+        data = (self.out / "generated" / "render_passes.lua").read_text()
         opaque = data.index('{tags = {"order_0", "opaque"}')
         base_solid = data.index('{tags = {"base", "opaque"}')
         base = data.index('{tags = {"base", "blend"}')
@@ -257,26 +261,189 @@ class DefoldExportTests(unittest.TestCase):
         go = (self.out / "generated" / "go" / "Towers_Nature.go").read_text()
         self.assertIn('id: "dno_solid"', go)
         solid = (self.out / "generated" / "models" / "Towers_Nature_dno_solid.model").read_text()
-        self.assertIn('mesh: "/assets/models/Towers_Nature_dno.glb"', solid)  # reuses the base glb
+        self.assertIn('mesh: "/assets/models/Towers_Nature_dno_solid.glb"', solid)
         self.assertIn('name: "08 - Defauserglt#2@base"', solid)  # binds to the base's material slot
         self.assertIn("if (c.a < 0.990000) discard", (self.out / "generated" / "materials" / "Towers_Nature_2_solid.fp").read_text())
 
-    def test_level_data_zones_gradient_and_hud_atlas(self) -> None:
-        data = (self.out / "generated" / "level_data.lua").read_text()
+    def test_location_data_zones_light_gradient_and_hud_atlas(self) -> None:
+        data = (self.out / "generated" / "locations" / "l1.lua").read_text()
         self.assertIn("x_min = 50, x_max = 70, z_min = -40, z_max = 0", data)
-        self.assertIn('{tags = {"order_30", "opaque"}, depth_test = false', data)
         self.assertIn("grass = {", data)
         self.assertIn("road = {", data)
-        self.assertIn("M.gradient = {", data)
+        self.assertIn('M.music = "music1"', data)
+        self.assertIn("M.shadows = false", (self.out / "generated" / "locations" / "l6.lua").read_text())
+        passes = (self.out / "generated" / "render_passes.lua").read_text()
+        self.assertIn('{tags = {"order_30", "opaque"}, depth_test = false', passes)
+        self.assertIn("M.gradient = {", (self.out / "generated" / "common.lua").read_text())
         self.assertEqual(len([p for p in (self.out / "assets" / "hud").glob("g*.png")]), 255 - 33 + 1)
         self.assertTrue((self.out / "assets" / "hud" / "btn_big_6_2.png").exists())
         self.assertTrue((self.out / "data" / "raids.json").exists())
         entities = (self.out / "generated" / "entities.go").read_text()
         self.assertIn('id: "factory_Monsters_Ratter"', entities)
-        light = self.exporter.light
+        light = self.exporter.light(1)
         self.assertAlmostEqual(sum(c * c for c in light["direction"]), 1.0, places=5)
         self.assertLess(light["direction"][1], 0.0)
 
+    def test_render_passes_cover_every_scene_order(self) -> None:
+        passes = (self.out / "generated" / "render_passes.lua").read_text()
+        for location in (1, 6):
+            nodes = self.module.load_sidecar(self.exporter.location_glb(location))["nodes"]
+            for order in {int(n["order"]) for n in nodes.values() if int(n.get("order", 0)) > 0}:
+                self.assertIn(f'"order_{order}"', passes)
+
+    def test_lit_materials_take_the_light_from_the_render_script(self) -> None:
+        # The light is not baked: every lit material carries the same neutral defaults and
+        # the render script passes the scene's light in a constant buffer.
+        from modexport.materials import NEUTRAL_LIGHT
+        material = (self.out / "generated" / "materials" / "Monsters_Crawl_0.material").read_text()
+        self.assertIn('name: "light_dir"', material)
+        ambient = material[material.index('name: "ambient"'):]
+        self.assertIn(f"x: {NEUTRAL_LIGHT['ambient'][0]:.6f}", ambient[:200])
+        self.assertIn('name: "point_light1"', material)
+        vp = (self.out / "generated" / "materials" / "Monsters_Crawl_0.vp").read_text()
+        self.assertIn("point_light(point_light0, point_color0, p.xyz, n)", vp)
+
+    def test_menu_is_lit_by_its_omni_lights_only(self) -> None:
+        # `_floadmenu`: AmbientLight 0,0,0 and env.b3d's two B3DEXT_OMNILIGHT (white, default
+        # range); no directional light.
+        menus = (self.out / "generated" / "menus.lua").read_text()
+        env = menus[menus.index('M["Menu/env"]'):]
+        light = env[env.index("light = "):env.index("\n", env.index("light = "))]
+        self.assertIn("color = {0.000000, 0.000000, 0.000000}, ambient = {0.000000, 0.000000, 0.000000}", light)
+        self.assertEqual(light.count("range = 1000.000000, color = {1.000000, 1.000000, 1.000000}"), 2)
+        # Omni01 (Blitz z 778.86 -> glTF -778.86).
+        self.assertIn("{209.728302, 371.694672, -778.856873}", light)
+
+    def test_translucent_brushes_are_ordered_like_blitz_entities(self) -> None:
+        # Blitz sorts translucent entities by their origins; one Defold model has one origin,
+        # so the exporter ranks the brushes (`<layer>_l<rank>` passes, farthest first).
+        def tags_of(model_name: str, texture: str) -> list[str]:
+            model = (self.out / "generated" / "models" / f"{model_name}.model").read_text()
+            block = model[:model.index(texture)]
+            material = block[block.rindex('material: "') + len('material: "'):]
+            text = (self.out / material[:material.index('"')].lstrip("/")).read_text()
+            return re.findall(r'tags: "([^"]+)"', text)
+
+        # The menu's title stands in front of the road under it (they flickered).
+        road, title = tags_of("Menu_env", "road.png")[0], tags_of("Menu_env", "NameMenu.png")[0]
+        self.assertRegex(road, r"^world_l\d+$")
+        passes = (self.out / "generated" / "render_passes.lua").read_text()
+        self.assertLess(passes.index(f'"{road}", "blend"'), passes.index(f'"{title}", "blend"'))
+        # The sign's planks and posts share a brush: its depth companion keeps the posts
+        # behind the planks (they drew over them in the browser) and hides the captions the
+        # settings flight moves behind the planks.
+        solid = tags_of("Menu_buttons_solid", "buttonsfon.png")
+        self.assertEqual(solid, ["hud_solid", "opaque"])
+        self.assertIn('{tags = {"hud_solid", "opaque"}, depth_test = true, depth_write = true, color_write = false', passes)
+        fp = (self.out / "generated" / "materials" / "Menu_buttons_0_solid.fp").read_text()
+        self.assertIn("discard", fp)
+        # A depth companion's glb holds only its brushes: Defold draws a primitive whose
+        # material the model does not list with one it does, so the survival sheet's
+        # captions wrote depth and cut black holes in the planks under them.
+        doc, _ = read_glb(self.out / "assets" / "models" / "Menu_Send_solid.glb")
+        self.assertEqual([m["name"] for m in doc["materials"]], ["01 - Default#0"])
+
+    def test_hud_panel_nodes_are_ordered_like_blitz_entities(self) -> None:
+        # The HUD panel (Env) is static: each translucent node gets its own `panel_l<rank>`
+        # pass by the distance of its origin from the HUD camera. The time-speed track and
+        # its reset mark lie over the wood (in the browser they drew under it).
+        model = (self.out / "generated" / "models" / "Env.model").read_text()
+        passes = (self.out / "generated" / "render_passes.lua").read_text()
+
+        def pass_indices(texture: str) -> list[int]:
+            out = []
+            for block in model.split("materials {")[1:]:
+                if texture in block:
+                    material = re.search(r'material: "([^"]+)"', block).group(1)
+                    tag = re.search(r'tags: "([^"]+)"', (self.out / material.lstrip("/")).read_text()).group(1)
+                    self.assertRegex(tag, r"^panel_l\d+$")
+                    out.append(passes.index(f'"{tag}", "blend"'))
+            return out
+
+        wood, track = pass_indices("wood.png"), pass_indices("timespeed.png")
+        self.assertEqual((len(wood), len(track)), (2, 2))
+        self.assertLess(max(wood), min(track))
+        # The panel draws before the sheets over it (their depth companions and layers).
+        self.assertLess(max(track), passes.index('"hud_solid", "opaque"'))
+
+    def test_loading_sheet_takes_its_run_time_entity_orders(self) -> None:
+        # `_floadmenu`: EntityOrder fon, -5 / loading, -6 -- drawn over the menu sheets, across
+        # the whole canvas (the curtain covers Wide's sides too).
+        model = (self.out / "generated" / "models" / "Menu_loading.model").read_text()
+        tags = set()
+        for material in re.findall(r'material: "([^"]+)"', model):
+            text = (self.out / material.lstrip("/")).read_text()
+            tags.add(re.search(r'tags: "(canvas[^"]*)"', text).group(1))
+        self.assertEqual(tags, {"canvas_m5", "canvas_m6"})
+        passes = (self.out / "generated" / "render_passes.lua").read_text()
+        self.assertIn('{tags = {"canvas_m5", "blend"}, depth_test = false, depth_write = false, color_write = true, '
+                      'blend = "blend", canvas = true}', passes)
+        # Blitz's order: all of -5 before any of -6.
+        self.assertLess(passes.index('"canvas_m5", "blend"'), passes.index('"hud_m6", "blend"'))
+
+    def test_menu_sheets_are_posed_pickable_and_layered(self) -> None:
+        menus = (self.out / "generated" / "menus.lua").read_text()
+        buttons = menus[menus.index('M["Menu/buttons"]'):]
+        for item in ("start", "hardcore", "settings", "credits", "exit", "highscores", "ok"):
+            self.assertIn(f'["{item}"] = {{joint = ', buttons[:buttons.index('\n}')])
+        models = (self.out / "generated" / "models.lua").read_text()
+        sheet = models[models.index('M["Menu/SendTD"]'):]
+        sheet = sheet[:sheet.index('\n}')]
+        self.assertIn("bones = {count = 7", sheet)
+        self.assertIn("joint_parents = {0, 1, 2, 1, 1, 5, 1}", sheet)  # captions are children of their planks
+        # The captions over the planks draw in a later depth layer than the planks.
+        model = (self.out / "generated" / "models" / "Menu_buttons.model").read_text()
+
+        def layer_of(texture: str) -> int:
+            block = model[:model.index(texture)]
+            material = block[block.rindex('material: "') + len('material: "'):]
+            material = material[:material.index('"')]
+            text = (self.out / material.lstrip("/")).read_text()
+            return int(re.search(r'tags: "hud_l(\d+)"', text).group(1))
+
+        planks, captions = layer_of("buttonsfon.png"), layer_of("ButtonTexts.png")
+        self.assertLess(planks, captions)
+        passes = (self.out / "generated" / "render_passes.lua").read_text()
+        self.assertLess(passes.index(f'"hud_l{planks}", "blend"'), passes.index(f'"hud_l{captions}", "blend"'))
+        # The main menu camera follows cameraEnv's Camera01 over its 20 frames.
+        camera = menus[menus.index('M["Menu/cameraEnv"]'):]
+        self.assertIn("fov_h = 60.0", camera)
+        self.assertEqual(camera[:camera.index('\n}')].count("{pos = {"), 21)
+
+    def test_location_collections_carry_the_end_sheets(self) -> None:
+        collection = (self.out / "generated" / "collections" / "location1.collection").read_text()
+        for ident in ("congr", "gameover", "sel"):
+            self.assertIn(f'id: "{ident}"', collection)
+        self.assertIn("z: -10.0", collection)
+
+    def test_location_decorations_and_background(self) -> None:
+        l1 = (self.out / "generated" / "locations" / "l1.lua").read_text()
+        self.assertIn('M.clock = {hours = "clock_hours", minutes = "clock_minutes", seconds = "clock_seconds"}', l1)
+        collection = (self.out / "generated" / "collections" / "location1.collection").read_text()
+        self.assertIn('prototype: "/generated/go/Location1_little_arrow.go"', collection)
+        # The hands are no longer part of the scene model.
+        doc, _ = self.glb("Location1")
+        self.assertNotIn("little_arrow", {n.get("name") for n in doc["nodes"]})
+        hand, _ = self.glb("Location1_little_arrow")
+        self.assertNotIn("translation", hand["nodes"][0])  # at the game object's origin
+        # `_floadlocation`: CameraClsColor (192, 212, 223) on location 6, black elsewhere.
+        self.assertIn("M.clear_color = {0.000000, 0.000000, 0.000000}", l1)
+        l6 = (self.out / "generated" / "locations" / "l6.lua").read_text()
+        self.assertIn("M.clear_color = {0.752941, 0.831373, 0.874510}", l6)
+
+    def test_river_frames_come_from_the_water_atlas(self) -> None:
+        models = (self.out / "generated" / "models.lua").read_text()
+        l1 = models[models.index('M["Location1"]'):]
+        self.assertIn('{group = "river", columns = 8, rows = 8, frames = 63, step = 1.000000}', l1[:l1.index("\n}")])
+        go = (self.out / "generated" / "go" / "Location1.go").read_text()
+        self.assertIn('id: "river"', go)
+
+    def test_sounds_are_grouped_for_the_volume_settings(self) -> None:
+        sounds = (self.out / "generated" / "sounds.go").read_text()
+        music = sounds[sounds.index('id: "music1"'):]
+        self.assertIn('group: \\"music\\"', music[:300])
+        click = sounds[sounds.index('id: "click"'):]
+        self.assertIn('group: \\"sfx\\"', click[:300])
 
 if __name__ == "__main__":
     unittest.main()
