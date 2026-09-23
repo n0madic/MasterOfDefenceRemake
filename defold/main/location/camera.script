@@ -38,14 +38,13 @@ function init(self)
 	go.set_rotation(vmath.quat_rotation_x(PITCH))
 end
 
--- The pivot at (x, z), kept inside the bounds; in Wide mode its x range narrows with the
+-- The pivot at (x, z), kept inside the bounds; in Wide mode its range narrows with the
 -- canvas (main/location/camera_view.lua).
 local function place_pivot(self, x, z)
-	local b = self.bounds
 	local canvas = screen.layout(window.get_size())
-	local x_min, x_max = camera_view.x_limits(b, canvas.w / math.max(canvas.h, 1))
+	local x_min, x_max, z_min, z_max = camera_view.limits(self.bounds, canvas.w / math.max(canvas.h, 1))
 	self.pivot.x = math.min(math.max(x, x_min), x_max)
-	self.pivot.z = math.min(math.max(z, b.z_min), b.z_max)
+	self.pivot.z = math.min(math.max(z, z_min), z_max)
 end
 
 local function scroll(self, ticks)
@@ -96,7 +95,7 @@ function on_input(self, action_id, action)
 		end
 		y = h - y  -- down the screen
 		self.mouse.x = (x <= EDGE) and -1 or ((x >= w - EDGE) and 1 or 0)
-		self.mouse.z = (y <= EDGE) and -1 or ((y >= screen.HEIGHT - EDGE) and 1 or 0)
+		self.mouse.z = (y <= EDGE) and -1 or ((y >= h - EDGE) and 1 or 0)
 		return
 	end
 	local axis = KEY_AXES[action_id]

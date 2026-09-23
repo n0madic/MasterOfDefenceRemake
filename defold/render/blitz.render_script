@@ -127,7 +127,8 @@ function init(self)
 	-- The HUD panel is drawn by a fixed camera at the origin (matching camera.go: fov,
 	-- 4:3, near 0.5, far 600) so it never moves with the scrolling world camera.
 	self.hud_projection = vmath.matrix4_perspective(screen.FOV, screen.ASPECT, 0.5, 600)
-	-- The same camera over the whole canvas (same height, so the box part is unchanged).
+	-- The same camera over the whole canvas (the 4:3 frame kept, so the box part is
+	-- unchanged).
 	self.overlay = {box_projection = self.hud_projection}
 	set_clear_color(self, vmath.vector4(0, 0, 0, 1))
 	-- The gamma setting (`_fsetgammaintensity`, -100..100): while it is not 0 the frame is
@@ -146,6 +147,7 @@ function on_message(self, message_id, message)
 		local used = message.screen and self.screen_passes[message.screen]
 		self.world_passes = used and used.world or self.passes
 		self.overlay_passes = used and used.hud or self.hud_passes
+		screen.min_aspect = message.min_aspect or screen.ASPECT
 		screen.max_aspect = message.max_aspect or screen.ASPECT
 		set_clear_color(self, message.clear_color)
 		self.light_dir = message.light_dir
@@ -209,11 +211,13 @@ end
 -- The world (canvas) and the overlay (box) through the screen's camera.
 local function draw_scene(self, cam, canvas, box)
 	render.set_viewport(canvas.x, canvas.y, canvas.w, canvas.h)
-	-- The screen's camera with the canvas's aspect (its projection is also what the
-	-- scripts project with). No frustum culling: a bone-posed model's bounding box is that
-	-- of its joint-local vertices, not of the pose (the menu sky, parented to the flying
-	-- camera, was culled).
-	camera.set_aspect_ratio(cam, canvas.w / canvas.h)
+	-- The screen's camera with the canvas's aspect and field of view (its projection is
+	-- also what the scripts project with). No frustum culling: a bone-posed model's
+	-- bounding box is that of its joint-local vertices, not of the pose (the menu sky,
+	-- parented to the flying camera, was culled).
+	local aspect = canvas.w / canvas.h
+	camera.set_aspect_ratio(cam, aspect)
+	camera.set_fov(cam, screen.fov(aspect))
 	render.set_camera(cam, self.camera_options)
 	local view = camera.get_view(cam)
 	self.constants.light_dir = view * self.light_dir
@@ -238,10 +242,9 @@ local function draw_scene(self, cam, canvas, box)
 	render.set_projection(self.hud_projection)
 	local overlay = self.overlay
 	overlay.box, overlay.canvas = box, canvas
-	local aspect = canvas.w / canvas.h
 	if overlay.canvas_aspect ~= aspect then
 		overlay.canvas_aspect = aspect
-		overlay.canvas_projection = vmath.matrix4_perspective(screen.FOV, aspect, 0.5, 600)
+		overlay.canvas_projection = vmath.matrix4_perspective(screen.fov(aspect), aspect, 0.5, 600)
 	end
 	draw_passes(self.overlay_passes, self.draw_options, overlay)
 	render.set_color_mask(true, true, true, true)

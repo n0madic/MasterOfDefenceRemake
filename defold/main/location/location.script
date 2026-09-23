@@ -325,10 +325,10 @@ end
 -- --- setup ------------------------------------------------------------------------------
 
 -- The render script draws with this scene's background and light; Wide mode stops where
--- the camera's x range can no longer hide the location's edge.
+-- the camera's range can no longer hide the location's edge.
 local function set_scene(loc)
-	render_scene.set({clear_color = loc.clear_color, light = loc.light,
-		max_aspect = camera_view.max_aspect(loc.bounds, screen.WIDE_MAX_ASPECT)})
+	local min_aspect, max_aspect = camera_view.aspect_limits(loc.bounds)
+	render_scene.set({clear_color = loc.clear_color, light = loc.light, min_aspect = min_aspect, max_aspect = max_aspect})
 end
 
 -- The debug scenarios of main/location/demo.lua.

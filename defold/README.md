@@ -128,11 +128,13 @@ sounds are encoded from the original (`../tools/audio.py`).
 
 - High scores are two local top-10 tables (campaign, survival); the online submission and
   its "send" planks are gone, the survival sheet's remaining planks are centred.
-- Wide mode (a setting): the world and the menu backdrop fill the window up to 1.8:1,
-  the HUD panel, the sheets and the gui stay in the centred 4:3 box. A location's camera
-  range narrows by the extra ground the wider view uncovers, and a location is drawn only
-  as wide as that range allows (location 1 about 1.64:1), so the wide view never shows
-  ground the 4:3 view could not (`main/location/camera_view.lua`).
+- Wide mode (a setting): the world fills the window, wider or taller than 4:3, the HUD
+  panel, the sheets and the gui stay in the centred 4:3 box; the cameras keep the 4:3 frame
+  in view (the vertical fov when wider, the horizontal one when taller). The menu backdrop
+  allows 1.25:1 to 1.8:1. A location's camera range narrows by the extra ground the bigger
+  view uncovers, and a location is drawn only as wide / tall as that range allows (location
+  1 about 1.07:1 to 1.64:1, the others up to 2.3:1 to 2.9:1), so the wide view never shows
+  ground the 4:3 view could not (`main/location/camera_view.lua`, as godot's CameraRig).
 - The settings drop the original's resolution, colour depth and VSync; fullscreen can be
   toggled in the browser only (the desktop window mode is the platform's). The gamma
   (`SetGamma` offsets of -100..100 levels) is a full-screen pass over a render target,

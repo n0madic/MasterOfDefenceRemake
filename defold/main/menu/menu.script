@@ -38,12 +38,16 @@ local MODE_OF_ITEM = {new = "new", hard = "hard", insane = "insane", continue = 
 -- Debug (main/config.lua): `menu_script=start,new` activates those items one per
 -- DEBUG_STEP_TICKS without input; `menu_hover=item` keeps the cursor on an item.
 local DEBUG_STEP_TICKS = 60
+-- Wide mode, measured on the scene: the sky backdrop spans an aspect of ~1.8 in both the
+-- main and the settings view; below 1.25 the sky dome ends at the top and the planks parked
+-- under the frame ("ok", "credits") show at the bottom.
+local MIN_ASPECT, MAX_ASPECT = 1.25, 1.8
 
 local function set_scene()
 	local env = menus[ENV_MODEL]
-	-- The sky backdrop spans about 1.8; env.b3d's two omni lights light the world
-	-- (`AmbientLight 0,0,0` in `_floadmenu`: nothing else).
-	render_scene.set({clear_color = env.clear_color, light = env.light, max_aspect = screen.WIDE_MAX_ASPECT})
+	-- env.b3d's two omni lights light the world (`AmbientLight 0,0,0` in `_floadmenu`:
+	-- nothing else).
+	render_scene.set({clear_color = env.clear_color, light = env.light, min_aspect = MIN_ASPECT, max_aspect = MAX_ASPECT})
 end
 
 -- The menu camera at flight frame `t` (the `Camera01` pose of cameraEnv.b3d, lerped).

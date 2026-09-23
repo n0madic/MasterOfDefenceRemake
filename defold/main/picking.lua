@@ -11,7 +11,7 @@ M.AIR_OFFSET_Y = 3
 
 -- World-space ray through window pixel (x, y) (origin bottom-left) of a `w` x `h` window.
 function M.ray(cam_pos, cam_rot, x, y, w, h)
-	local t = math.tan(screen.FOV / 2)
+	local t = screen.tan_half_fov(w / h)
 	local nx = (2 * x / w - 1) * t * (w / h)
 	local ny = (2 * y / h - 1) * t
 	local dir = vmath.normalize(vmath.rotate(cam_rot, vmath.vector3(nx, ny, -1)))
