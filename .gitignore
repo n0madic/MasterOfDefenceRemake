@@ -1,6 +1,7 @@
 *.exe
 *unpacked
 __pycache__
+.claude/
 .godot
 .vscode
 godot/assets/
