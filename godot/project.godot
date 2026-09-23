@@ -37,8 +37,9 @@ common/physics_ticks_per_second=30
 [rendering]
 
 ; Phones run the Mobile (Vulkan) renderer. It has no depth pre-pass, so the alpha-textured
-; brushes (menu sign, HUD sheets, road patches) write depth in the colour pass instead
-; (b3d_post_import.gd, DEPTH_DRAW_ALWAYS) -- otherwise the sign posts sort over the planks.
+; brushes (menu sign, HUD sheets, road patches) get a second, alpha-scissored pass that writes
+; the depth of their solid texels (b3d_post_import.gd, `solid_pass` as the material's
+; next_pass) -- otherwise the sign posts sort over the planks.
 ; The emulator cannot present Vulkan; the "Android Emulator" export preset forces
 ; gl_compatibility, whose pre-pass stays on for mobile GPUs here.
 renderer/rendering_method.mobile="mobile"

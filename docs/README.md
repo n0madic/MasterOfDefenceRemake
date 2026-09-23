@@ -1,13 +1,14 @@
 # Master of Defense — research on the original
 
 Documentation on the classic game **Master of Defense** (Voodoo Dimention, 2006, version 1.67e)
-for building a remake in Godot. Everything written here comes from the unpacked
+for building the remake (Godot and Defold ports). Everything written here comes from the unpacked
 distribution (`MasterOfDefense_unpacked/`) and decompilation of the game module `Main.exe`.
 
 ## How to read this
 
 - The mark **[code: `_fname`]** means the fact is confirmed by the decompiled function
-  `reference/decomp/_fname.c`. Function and global-variable names are the original
+  `reference/decomp/_fname.c` (generated locally by the tools' decompilation pipeline, not
+  committed). Function and global-variable names are the original
   ones (the Blitz3D linker's symbols survived in the executable).
 - The mark **[assumption]** is a conclusion not directly verified in the code.
 - Numeric constants are given exactly (from the code); the unit of game time is the **tick**
@@ -28,9 +29,10 @@ distribution (`MasterOfDefense_unpacked/`) and decompilation of the game module 
 | [09-ui-menus-tutorial.md](09-ui-menus-tutorial.md) | Menus, HUD, tutorial, messages, sounds/music |
 | [10-type-layouts.md](10-type-layouts.md) | Field layout of Blitz types (a key for reading the decompiled output) |
 | [11-assets.md](11-assets.md) | Asset inventory and what's actually used |
-| [12-remake-notes.md](12-remake-notes.md) | Notes for the Godot remake and a list of unknowns |
+| [12-remake-notes.md](12-remake-notes.md) | What the remake (Godot and Defold) carries over and how, original quirks it drops or keeps, open questions |
 | [13-hud-geometry.md](13-hud-geometry.md) | Exact HUD geometry: the `gui.png` atlas, font, `Env.b3d` panel, every button and tooltip |
 | `data/` | Machine-readable dumps: `units.json`, `towers.json`, `raids.json`, `enemy_paths.json`, `path_times.json`, `hud_layout.json`, `blitz_types.txt` |
 
 The tools used to produce all of this live in `../tools/` (see `tools/README.md`);
-the decompiled functions are in `../reference/decomp/`.
+the decompiled functions go to `../reference/decomp/` (gitignored — run the
+[decompilation pipeline](../tools/README.md#full-decompilation-pipeline) to get them).

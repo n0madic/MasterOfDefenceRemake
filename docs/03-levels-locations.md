@@ -48,6 +48,8 @@ Everything else is decoration. The whole scene is animated via `Animate(scene,1,
 4. The `*Place.b3d` marker is tinted green (0,250,0) / red (250,0,0); the range circle
    is only shown when placement is allowed.
 
+<a id="enemy-path-path1b3d"></a>
+
 ## Enemy path `Path1.b3d` [code: `_fcreateenemy`, `_fupdateenemies`]
 
 Node `path` has position and rotation keys on every frame 0..N. Mechanics:

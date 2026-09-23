@@ -7,22 +7,26 @@ original (`../MasterOfDefense_unpacked/Data`) by the tools in `../tools`.
 
 ```bash
 python3 tools/build_assets.py --target godot   # B3D/MD2 → glb, textures, tables, icons, sounds (make assets PORT=godot)
-godot --headless --path godot --import         # import resources (make import)
+godot --headless --path godot --import         # import resources (make import; make reimport drops the cache first)
 ```
+
+`make pipeline` does both. `data/*.json` is committed (the Lua tests of the Defold port read it
+too); `assets/` and `icons/*.png` are generated and gitignored.
 
 ## Builds (mobile and web)
 
-Presets live in `export_presets.cfg` (`Web`, `Android`, `iOS`); commands are in `../Makefile`
+Presets live in `export_presets.cfg` (`Web`, `Android`, `Android Custom`, `Android Emulator`, `iOS`); commands are in `../Makefile`
 (`make help`; run from the repo root, export templates for the current Godot version are required):
 
 ```bash
-make web            # build/web (no-threads variant: can be hosted without COOP/COEP headers)
+make web            # build/web (no-threads variant: can be hosted without COOP/COEP headers); web-debug, web-zip
 make serve-web      # http://localhost:8060
 make android        # build/android/MasterOfDefense-debug.apk (arm64, debug keystore from the editor settings)
 make android-release  # release APK; key via GODOT_ANDROID_KEYSTORE_RELEASE_PATH/_USER/_PASSWORD, falls back to the debug key with a warning if unset
 make android-template GODOT_SRC=~/godot   # trimmed release template built from Godot 4.7.2 sources → build/templates (see below)
 make android-emulator # debug APK for the emulator (gl_compatibility)
-make ios IOS_TEAM_ID=XXXXXXXXXX   # build/ios/*.xcodeproj, signing and archiving happen in Xcode
+make android-install / android-run / android-log / android-info   # the connected device
+make ios IOS_TEAM_ID=XXXXXXXXXX   # build/ios/*.xcodeproj, signing and archiving happen in Xcode (ios-open)
 make icon           # renders ../art/icon_1024.png from the Military tower model (needs a window); `make assets` derives icons/*.png from it (the favicon and the remaining iOS icons are derived from icons/icon_256.png automatically)
 ```
 
@@ -53,8 +57,8 @@ the original `Data/td.ico`; the launcher icons of both ports are derived from it
 ## Tests
 
 ```bash
-godot --headless --path godot -s res://tests/run_tests.gd [-- --filter=test_towers]
-python3 -m unittest discover -s tools/tests -v
+godot --headless --path godot -s res://tests/run_tests.gd [-- --filter=test_towers]   # make test-godot TEST_FILTER=test_towers
+python3 -m unittest discover -s tools/tests -v                                         # make test-tools
 ```
 
 Visual check of the conversion (needs a window):
@@ -63,19 +67,26 @@ a single model in front of the camera: `-s res://tools/render_model.gd -- MODEL.
 an effect over time (`OneShotView`, one frame per tick into a directory):
 `-s res://tools/render_effect.gd -- res://assets/models/Towers/MilitaryEff.glb OUT_DIR [scale] [speed] [distance]`.
 A series of gameplay screenshots: `--shot=PATH:FIRST-LAST/STEP` (a frame number is appended to the name).
+The scene tree of a model (headless): `-s res://tools/inspect_scene.gd -- res://assets/models/X.glb`.
+The icon: `-s res://tools/render_icon.gd [-- OUT.png [level] [elev] [yaw]]` (`make icon`).
 
 ## Running
 
-`godot --path godot` — the main menu. Debug arguments (after `--`): `--location=L`
-(jump straight to a location), `--seed=N` (random seed), `--survival`, `--demo` (a tower + start a raid), `--debug` (F1 — start a
+`godot --path godot` — the main menu (`make run ARGS="…"`). Debug arguments (after `--`): `--location=L`
+(jump straight to a location), `--seed=N` (random seed for `--location`/`--demo`; survival ignores it), `--survival`, `--demo` (a tower + start a raid), `--debug` (F1 — start a
 raid, F3 — overlay, F4 — gold/experience/magic, F6 — finish the location, F7 — defeat),
 `--cheats` (inhabitants never die, gold and experience are never spent, the run isn't scored),
 `--demo-tower=T` (tower type for `--demo`; Flame unlocks Fire Magic), `--demo-level=N` (build that
-tower at upgrade level N, free of charge),
-`--shot=PATH:FRAMES` (screenshot and exit), `--act=FRAME:click:X,Y` / `--act=FRAME:key:NAME` / `--act=FRAME:close` (the window's close button), `--hide=node,…`
-(scripted input), `--act=FRAME:pivot:X,Z` (pan the location camera to a point, clamped to its bounds),
+tower at upgrade level N, free of charge; both imply `--demo`),
+`--shot=PATH:FRAMES` (screenshot and exit), `--act=FRAME:click:X,Y` / `--act=FRAME:key:NAME` / `--act=FRAME:close` (the window's close button) (scripted input),
+`--act=FRAME:pivot:X,Z` (pan the location camera to a point, clamped to its bounds), `--hide=node,…` (hide these location nodes after loading),
 `--hover=X,Y`, `--open-skills`, `--tutorial-page=N`, `--safe-area=L,T,R,B` (simulates a
 phone's notch/gesture-bar cutout, in window pixels).
+
+Touch (phones): in a location a tap is a left click, a still press of 500 ms a right click, a drag
+(past 10 px) pans the camera; a touch switches edge scrolling off until a real mouse moves. Android Back: in
+a location it closes the skills window or opens/closes the in-game menu, in the main menu it quits,
+elsewhere nothing (Godot 4.7 delivers each press twice, `Main` drops the duplicate of the same frame).
 
 Saves — `user://saves/<Role>.json` (`Automatic`, `Save`, `Location<L>`, `Survival`),
 settings — `user://settings.json`, high scores — `user://highscores.json`.
@@ -86,8 +97,12 @@ settings — `user://settings.json`, high scores — `user://highscores.json`.
   order of `_fgamelogic`; `Enemy/Tower/Bullet/Balloon/Bomb.gd` — objects; `PathFollower.gd` —
   path movement (a port of `tools/simulate_path.py`); `Skills.gd` — skills; `Balance.gd` —
   auto-balance; `Survival.gd` — survival raid generation.
-- `src/autoload/` — `GameData` (tables from `data/*.json`), `Ticker` (tick accumulator,
-  convention C3), `Blitz` (not an autoload, a static class: `round_int`, `f32`, coordinates).
+- `src/autoload/` — `GameData` (tables from `data/*.json`), `GameState` (the session: game,
+  debug/cheat flags), `Ticker` (tick accumulator, convention C3), `AudioManager`, `SaveManager`
+  (settings, saves, high scores), `DisplayManager` (window, Wide mode, aspect limits, gamma, safe
+  area), `Blitz` (not an autoload, a static class: `round_int`, `f32`, coordinates).
+- `src/util/` — `BlitzAnimator` (per-tick animation seeking, ANIMMAP scrolling, material
+  changes that keep both passes in step), `UvAtlasAnimator` (sprite-sheet animation).
 - `addons/b3d_import/b3d_post_import.gd` — glb post-import: applies from the sidecar
   `*.b3d.json` whatever isn't in the glTF (ADD/MUL blending, vertex colors, lightmaps on UV2,
   `TextureBlend 5` → albedo ×2, EntityOrder → render_priority, see "Deviations"). Billboards
@@ -97,7 +112,7 @@ settings — `user://settings.json`, high scores — `user://highscores.json`.
   Brushes with spherical env-mapping (texture flag 64: tower glows, bullets,
   effects, the death "ghost"), every multi-layer brush (a second alpha layer masks the
   first: Location5's `noparking`, the `transp*` patches, lightmaps), and layers with a positive
-  EntityOrder get a generated `ShaderMaterial` — the project's only shader:
+  EntityOrder get a generated `ShaderMaterial` — the importer's only spatial shader:
   sphere UV = the normal in camera space `(0.5+0.5·nx, 0.5−0.5·ny)`, as in `sphere_mat`
   in `gxscene.cpp`; layers are combined per `TextureBlend` (1 alpha, 2 multiply, 3 add,
   5 modulate2x), the second layer reads `UV2` (the converter writes its coordinates there);
@@ -107,16 +122,24 @@ settings — `user://settings.json`, high scores — `user://highscores.json`.
   vertex color replaces the brush's color (`D3DMCS_COLOR1`), the brush's alpha is preserved;
   the `albedo`/`uv1_offset` uniforms mirror StandardMaterial3D (so `BlitzAnimator.material_color`
   and others work with both material types).
+- `src/scenes/Main.gd` — the screen state machine; `LoadingScreen` — the "Loading" plank shown
+  while a location loads.
 - `src/scenes/location/` — `LocationScreen` (the gameplay screen: 3D view + HUD + tutorial +
-  hotkeys), `LocationView` (the location scene, entity views), `CameraRig`, `Picker`.
+  hotkeys), `LocationView` (the location scene, entity views, touch input), `CameraRig`, `Picker`,
+  `Warmup.gd` (`ModelWarmup`: loads and draws every model a location can spawn off-screen so
+  shaders compile before play — a few per frame on the map screen, the rest under the loading plank).
+- `src/scenes/entities/` — `TowerView`, `EnemyView`, `BulletView`, `OneShotView` (effects),
+  `PlaceMarkerView`.
 - `src/scenes/hud/` — `Hud` (the `Env.glb` panel on the camera + 2D buttons/texts), `BlitzText`
   (a 16×16 font from `gui.png`, `<colR=…>` tags, per-letter alpha), `GuiAtlas`, `Eniretu`
-  (slider/checkbox/radio button/text field built from the atlas), `Tutorial`.
-- `src/scenes/menu/` — `MenuScene3D` (the original's 3D menus, with picking of "items" and the
+  (slider/checkbox/radio button/text field built from the atlas), `Tutorial`, `HudLayout` (Wide-mode
+  anchoring of the HUD groups, see "Deviations").
+- `src/scenes/menu/` — `ScreenBase` (base of the screens with their own camera, owns their aspect
+  limits), `MenuScene3D` (the original's 3D menus, with picking of "items" and the
   `sel.b3d` cursor), `MainMenu` (with the `cameraEnv` camera fly-through into settings), `OptionsPanel`
   (Eniretu widgets at the coordinates from `_fguicreateoptionsbuttons`), `MapScreen`, `SimpleScreen`
   (congratulations/defeat/credits/high scores), `InGameMenu` (the `ingame.b3d` sheet, tilting toward the
-  cursor, 3D sliders `music.b3d`/`sound.b3d`); `Main.gd` — the screen state machine.
+  cursor, 3D sliders `music.b3d`/`sound.b3d`).
 - `src/sim/SaveGame.gd` — state serialization (the `tthegamet` fields + towers).
 - `tests/` — headless tests (`run_tests.gd` looks for `test_*.gd`), including `test_campaign`
   (a run through 180 raids and 50 survival raids with a scripted defense).
@@ -142,7 +165,9 @@ settings — `user://settings.json`, high scores — `user://highscores.json`.
 - A raid counts as repulsed once the number of living non-inhabitants hits 0 (`_fdeleteenemy` →
   `_fnextlevel`), even if not every monster has been created yet: killing the first monster before the
   second one spawns ends the raid, and spawning then continues from the next raid's list.
-- Game speed: `1000 \ (40 + slider)` ms per tick; key M sets the slider to 100 (7 ms).
+- Game speed: `1000 \ (40 + slider)` ms per tick when the slider is dragged, but the hotkeys set the
+  rate directly: M = 120 fps (8 ms) with the slider drawn at 100 (dragging it there gives 140), N = 60;
+  the in-game menu runs at 60 and restores the previous rate without moving the slider.
 
 ## Deviations from the original
 
@@ -161,18 +186,20 @@ settings — `user://settings.json`, high scores — `user://highscores.json`.
 - `Raid`/`Economy` from the plan weren't split into separate files: income, inhabitant losses, and spawning
   are implemented in `Game.gd` (`handle_levels`, `next_level`).
 - B3D bones (`Health.b3d`, `Balloon.b3d`) are exported as a glTF skin (Godot builds a
-  `Skeleton3D`); `tools/b3d2gltf.py --no-skin` leaves the bones as empty nodes.
+  `Skeleton3D`); `tools/build_assets.py --no-skin` (or `tools/b3d2gltf.py --no-skin`) leaves the bones as empty nodes.
 - Textures that Blitz loaded with the alpha flag but no alpha channel (alpha = brightness), or with
   the masked flag (black = transparent), are generated by the converter as `*__alpha.png`,
   `*__alphaw.png`, `*__mask.png`.
 - The "Choose resolution" and "Color depth" settings are removed (rendering is always 800×600, scaled
-  to fit the window; their planks in `buttons.b3d` are hidden); on desktop, window size,
+  to fit the window; the resolution plank in `buttons.b3d` is hidden, the colour-depth one carries the
+  "Screen" toggle below, the VSync plank is hidden where there is no VSync); on desktop, window size,
   position, and the "maximized" state are remembered on exit (`XRes`/`YRes`/`WindowX`/
   `WindowY`/`WindowMaximized`) and restored on start (the window is pulled back into the usable
   screen area; centered if no position was saved); "Gamma" is a full-screen
   pass of `pow(rgb, 1/2^(g/100))` over the frame (`DisplayManager`), applied immediately as the
   slider moves. "Windowed" / "VSync" only exist on desktop; in the browser there's a single
-  "Fullscreen" checkbox instead (applied on "ok" — a user gesture), and nothing on mobile.
+  "Fullscreen" checkbox instead (applied on "ok" — a user gesture), and nothing on mobile. In the
+  browser the main menu's "Exit" button is removed (closing the tab is the exit).
 - A "Screen" toggle sits on the former "Color depth" plank: "4:3" (default, like the
   original — an 800×600 canvas with letterboxing) or "Wide" — the canvas grows along whichever axis has
   room (`content_scale_size` based on the window's aspect), the 3D view fills the window, and the "box" with
@@ -187,8 +214,7 @@ settings — `user://settings.json`, high scores — `user://highscores.json`.
   info panel, tutorial-pointer (`Lines.png`) drops near buttons stay rigid while the
   line to the sheet stretches (the mesh is cut along u/v thresholds from `HudLayout.TUTORIAL_RULES`).
   Pointers that the animation "parks" just past the 4:3 frame are hidden in wider/taller canvases
-  (`HudLayout.cull_parked`). Debug flags: `--tutorial-page=N` opens the
-  location on the given tutorial page, `--act=F:pivot:X,Z` drives the camera to a point (clamped to its bounds).
+  (`HudLayout.cull_parked`). Debug flags: `--tutorial-page=N`, `--act=F:pivot:X,Z` (see "Running").
   In a location, the scroll bounds (computed for the 4:3 frame) are narrowed by however much the
   frame's footprint on the ground grew (`CameraRig.fit_bounds`, based on the far edge of the view trapezoid), so
   that at the edge the camera shows the same thing as in 4:3; where the scroll rectangle would collapse

@@ -18,8 +18,8 @@ All per-level numeric parameters — `data/towers.json` (from Tower1..5.csv). In
 | Land | 20→220 (ground) | 10·1.1^lvl (10→25.9) | 982→300 | 30; 20,20,20,35,40,50,50,50,60,70 |
 | Magic | 20→120 (air, 5 lvl) | 10·1.1^lvl | 828→468 | 30; 20,20,30,40,50 |
 | Plant | 10→110 (both) | 10·1.1^lvl | 973→200 | 30; 20,25,30,35,40,50,60,70,80,90 |
-| Icerock | 5→30 (both, 5 lvl); freeze 15→40 | 10·1.2^lvl (10→24.9) | 807→440 | 30; 30,30,30,30,40 |
-| Flame | 0.3→1.2 (3 lvl); fire 55→220 | 5 | 367→267 | 10; 15,20,40 |
+| Icerock | 5→30 (both, 5 lvl); freeze 15→40 | 10·1.2^lvl (10→24.9) | 806→440 | 30; 30,30,30,30,40 |
+| Flame | 0.3→1.2 (3 lvl); fire 55→220 | 5 | 366→266 | 10; 15,20,40 |
 
 The displayed "Attack speed" = `(1000 - RateOfFire) / 10` [code: `_ftowerinfo`].
 

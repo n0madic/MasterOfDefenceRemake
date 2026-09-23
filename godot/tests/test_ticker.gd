@@ -8,12 +8,38 @@ func test_period_from_slider() -> void:
 	check_eq(t.period_ms(), 16, "slider 20 -> 16 ms")
 	check_near(t.ticks_per_second(), 62.5, 1e-9, "62.5 ticks/s")
 	t.slider = 100
-	check_eq(t.fps(), 140, "M -> fps 140")
+	check_eq(t.fps(), 140, "slider dragged to 100 -> fps 140")
 	check_eq(t.period_ms(), 7, "1000 \\ 140 = 7")
 	t.slider = 80
 	check_eq(t.period_ms(), 8, "fps 120 -> 8 ms")
 	t.slider = 0
 	check_eq(t.period_ms(), 25, "fps 40 -> 25 ms")
+	t.free()
+
+
+## `_fmainloop` hotkeys set the fps directly: M = 120 with the slider drawn at 100, N = 60.
+func test_hotkeys_set_fps_directly() -> void:
+	var t: Node = TickerScript.new()
+	t.set_fast_speed()
+	check_eq(t.fps(), 120, "M -> fps 120")
+	check_eq(t.slider, 100, "M draws the slider at 100")
+	check_eq(t.period_ms(), 8, "1000 \\ 120 = 8")
+	t.set_normal_speed()
+	check_eq(t.fps(), 60, "N -> fps 60")
+	check_eq(t.slider, 20, "N draws the slider at 20")
+	t.free()
+
+
+## The in-game menu runs at 60 and restores the previous rate, the slider untouched.
+func test_set_fps_keeps_slider() -> void:
+	var t: Node = TickerScript.new()
+	t.set_fast_speed()
+	var saved: int = t.fps()
+	t.set_fps(t.NORMAL_FPS)
+	check_eq(t.fps(), 60, "menu runs at 60")
+	check_eq(t.slider, 100, "slider stays at 100")
+	t.set_fps(saved)
+	check_eq(t.fps(), 120, "closing restores 120, not 140")
 	t.free()
 
 

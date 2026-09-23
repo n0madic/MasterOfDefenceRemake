@@ -126,7 +126,7 @@ The mapping between Texts.txt indices and where they're used is collected in the
 ## B3D (models, scenes, paths)
 
 Standard Blitz3D chunk format (`BB3D` → `TEXS`, `BRUS`, `NODE{MESH{VRTS,TRIS}, BONE,
-KEYS, ANIM, NODE…}`). Parser: `tools/b3d_dump.py`. Quirks of this game:
+KEYS, ANIM, NODE…}`). Parser: `tools/b3dlib.py` (printer: `tools/b3d_dump.py`). Quirks of this game:
 
 - Location scenes load through B3D Extensions (`_fext_loadentity`): tag nodes
   `B3DEXT_BGCOLOR`, `B3DEXT_AMBIENT` (node position = RGB 0..1), `B3DEXT_DIRLIGHT`
@@ -184,6 +184,8 @@ Files: `Save.sav` (F5/button), `Automatic.sav` (autosave after every raid and on
 `Survival.sav`. Loading rebuilds towers via `_fcreatetower` + `_fpositiontower`
 and recomputes skills from levels (`_fupgradetowerbuildingskills(k,1)`).
 The string `"Towers"` is the only integrity check ("Corrupted save file!").
+
+<a id="blitz-module-format-in-the-exe"></a>
 
 ## Blitz module format in the exe [source: blitz3d/linker/linker.cpp, `bbruntime_dll.cpp`]
 

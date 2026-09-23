@@ -6,7 +6,8 @@ three difficulties, Survival, the tutorial, the balloon and its bombs, the in-ga
 saves (automatic, per location, quick save), the final titles and local high score
 tables. It runs on the desktop, in the browser and on Android / iOS.
 
-The rules follow the decompiled original (`reference/decomp`, [`docs/`](../docs/README.md));
+The rules follow the decompiled original (`reference/decomp`, generated locally by
+[`tools/`](../tools/README.md#full-decompilation-pipeline) and not committed; [`docs/`](../docs/README.md));
 the Godot remake (`godot/`) served as the reference for how the original engine behaves.
 
 Everything in `assets/`, `data/` and `generated/` is produced from the unpacked original
@@ -18,29 +19,42 @@ make defold            # import stage (skipped when up to date) + every location
 make defold-run        # bob build + dmengine (ARGS="--config=main.location=3")
 make defold-web        # browser bundle -> build/defold-web (serve it over http)
 make defold-android    # .apk -> build/defold-android
-defold/tools/bob.sh ios   # needs IOS_IDENTITY and IOS_PROVISIONING
-make test-sim          # the Lua simulation's headless tests (plain `lua`)
+defold/tools/bob.sh ios   # -> build/defold-ios; needs IOS_IDENTITY and IOS_PROVISIONING
+defold/tools/bob.sh mac   # .app bundle -> build/defold-mac
+defold/tools/bob.sh build # desktop build into defold/build only
+make test-sim          # headless Lua tests (plain `lua`; reads the committed godot/data)
 ```
 
+`make test-sim` covers the simulation and the runtime helpers (touch gestures, camera
+range, HUD layout, text layout, model poses, the fixed-step ticker); the exporter's Python
+tests are `tools/tests/test_defold_export.py` (`make test-tools`, skipped without `build/import`).
+
 Or open `defold/` in the Defold editor after `make defold` (the bootstrap collection
-refers to generated files). `tools/bob.sh` downloads `bob.jar` / `dmengine` matching the
-installed editor's engine SHA into `build/defold-tools`. Every command builds and runs the
+refers to generated files). `defold/tools/bob.sh` is macOS-only: it takes the Java and the
+engine SHA from the installed editor (`DEFOLD_APP`, default `/Applications/Defold.app`) and
+downloads the matching `bob.jar` / `dmengine` into `build/defold-tools` at the repository
+root (`DEFOLD_TOOLS`); `defold/build` is wiped before every build. Every command builds and runs the
 release engine (no log, profiler or debug web server); `VARIANT=debug` (e.g.
 `VARIANT=debug make defold-run`) takes the debug one, which prints the log and the
-`log_level=debug` output. bob 1.13.1's BasisU encoder now and then deadlocks: `bob.sh`
-kills a build whose CPU time stops for `BOB_STALL_SECONDS` (60) and retries it.
+`log_level=debug` output. bob 1.13.1's BasisU encoder now and then deadlocks: when bob's CPU time stops for
+`BOB_STALL_SECONDS` (60), `bob.sh` samples its native stack and, only if it shows the job
+pool's destructor waiting on its workers, kills the build and retries it (at most 3 attempts);
+any other stall (a download, a native-extension build) keeps waiting.
 
 Size: `tools/bob.sh` builds with `--texture-compression`, so `render/level.texture_profiles`
 applies: textures ship as Basis UASTC (RGB for the jpg ones), transcoded at load to what the
 GPU supports; the HUD atlas stays raw RGBA for the crisp glyphs. `make defold` re-encodes the
 music and the wavs longer than 2 s with libvorbis (`oggenc`, e.g. `brew install
-vorbis-tools`, plus `ffmpeg`); short effects stay PCM.
+vorbis-tools`, plus `ffmpeg`; without `oggenc` ffmpeg's own Vorbis encoder is used, which is
+stereo only); short effects stay PCM, resampled to 44.1 kHz 16-bit when the original is
+below 22050 Hz or 8-bit.
 
 ## Controls
 
 Arrow keys / WASD or the mouse at the window edge scroll; the panel buttons (or keys
 1–5) start placing a tower, LMB places it (Flame: on the road), RMB cancels, deselects and
-sends the balloon (RMB on the road); U/R upgrade, Delete sells, Tab cycles the towers,
+sends the balloon (RMB on the road); LMB on a monster selects it (the `selmonster` ring and
+its info text; exclusive with a tower selection, and a monster under the cursor wins); U/R upgrade, Delete sells, Tab cycles the towers,
 Space toggles the health bars, N/M normal/fast speed (or the slider), E/F2 the skills
 window (from location 2 on, as in the original), F5/F9 quick save/load, Esc (Android
 Back) closes a window or opens the in-game menu. On a touch screen a tap is the left
@@ -52,7 +66,8 @@ save, `survival=1`, `show_ending=N` (final titles, score N), `wide=1`; on a loca
 `demo=1` (a scripted defense that keeps upgrading), `demo_ticks=N` (simulate N ticks
 first), `demo_skills=1`, `demo_menu=1`, `pivot_x`/`pivot_z` (camera), `auto_advance=1`
 (leaves the map and the end sheets by itself); in the main menu `menu_script=start,new`
-(activates items) and `menu_hover=item`; `log_level=debug`.
+(activates items) and `menu_hover=item`; `log_level=debug` (desktop only, the web page
+ignores it). The scenarios are in `main/location/demo.lua`.
 
 ## Architecture
 
@@ -61,7 +76,8 @@ first), `demo_skills=1`, `demo_menu=1`, `pivot_x`/`pivot_z` (camera), `auto_adva
   `main/map/`, the six generated location collections and `main/ending/` (the campaign's
   final titles and scores; the survival score sheet hangs over its location, as in the
   original), one loaded at a time, the "Loading" plank shown while a location loads.
-  The audio script and the sounds live in the bootstrap collection too.
+  The audio script, the sounds and the gamma pass (`render/gamma.go`) live in the bootstrap
+  collection too. `main/ui/scores.gui_script` draws the high score tables.
 - **State**: `main/session.lua` holds the game tables, the settings and the running game
   (`script.shared_state`); screens change screens only by messages to the controller
   (`main/messages.lua`, small payloads). `main/storage.lua` keeps saves, settings and
@@ -71,13 +87,19 @@ first), `demo_skills=1`, `demo_menu=1`, `pivot_x`/`pivot_z` (camera), `auto_adva
   balloon and bombs, events instead of signals), `survival.lua`, `balloon.lua`,
   `tutorial.lua`, `savegame.lua`, `profile.lua` (settings defaults, difficulty unlocks,
   saves, high score tables), `skills.lua`, `balance.lua`, `path_follower.lua`, `data.lua`,
-  `blitz.lua` (Blitz numerics and its random generator).
+  `blitz.lua` (Blitz numerics and its random generator), `vec3.lua`.
+- **Runtime helpers** (`main/`): `ticker.lua` (the fixed-step clock), `screen.lua` (the 4:3
+  box, the canvas, safe-area shifts), `display.lua` (Wide mode, gamma, browser fullscreen),
+  `picking.lua` (mouse rays against zones, towers and monsters), `render_scene.lua` (a
+  screen's background and light for the render script), `blitz_text.lua` (`EText3D`
+  layout), `input/gesture.lua` (tap / long press / drag).
 - **Location screen** (`main/location/`): `location.script` ticks the game on the fixed
   step, turns input into intents and runs the end sheets, the in-game menu
   (`ingame_menu.lua`) and the tutorial; `world.lua` maps simulation events to views
   (`main/views/`) keyed by the simulation objects; `decor.lua` runs location 1's clock,
   location 2's eagle and water; `hud.gui_script` owns the HUD's input and draws what
-  `hud_model.lua` composes; `camera.script` scrolls.
+  `hud_model.lua` composes; `camera.script` scrolls within the range `camera_view.lua` computes;
+  `demo.lua` holds the debug scenarios.
 - **3D menus** (`main/ui/menu_scene.lua`): the original's menu sheets are bone-posed
   models drawn by a fixed overlay camera; items are picked by casting the mouse ray
   into each item's joint space, hidden through their joint's pose, and the `sel` cursor is
@@ -86,7 +108,9 @@ first), `demo_skills=1`, `demo_menu=1`, `pivot_x`/`pivot_z` (camera), `auto_adva
   `main/ui/widgets.lua` has the settings widgets.
 - **Rendering** (`render/blitz.render_script`): Blitz's draw order (positive EntityOrders
   first without the z-buffer, the opaque world, the tower bases, the translucent brushes,
-  negative orders last), then the overlay (HUD panel, sheets) in the 4:3 box and the gui.
+  negative orders last), then the overlay (HUD panel, sheets) and the gui. The overlay's
+  projection spans the whole canvas; the sheets are laid out for the 4:3 box and their nodes
+  parked outside that frame are culled, while in Wide mode the HUD's anchored groups leave it.
   The scene light (a directional light in the locations, the menu's two point lights)
   comes from the screen in a constant buffer, so one set of materials serves every
   location. Translucent brushes of one model draw in depth-ranked passes (Blitz sorts by
@@ -94,7 +118,7 @@ first), `demo_skills=1`, `demo_menu=1`, `pivot_x`/`pivot_z` (camera), `auto_adva
   alpha-textured brushes also write the depth of their solid texels. Only the changed
   render state is set between passes (the engine allows 1024 render commands a frame).
   The menu's loading curtain is drawn across the whole canvas, so in Wide mode it covers
-  the sides too; the rest of the overlay stays in the 4:3 box.
+  the sides too.
   The gui atlas is premultiplied (Defold's gui blends premultiplied alpha).
 
 ## The exporter
@@ -111,15 +135,20 @@ sounds are encoded from the original (`../tools/audio.py`).
   (tower base, animated textures, river / border, swapped textures) become separate
   model components; location 1's clock hands separate game objects.
 - **Materials**: one per brush, EntityOrder and group: the two-layer `TextureBlend`
-  combine, sphere maps (V flipped relative to Godot: Defold flips imported texcoords only),
+  combine, sphere maps and `B3DEXT_ANIMMAP` V offsets (both V flipped relative to Godot:
+  Defold flips imported texcoords only), per-layer single-axis clamps (`wrap_u`/`wrap_v`),
   EntityFX, per-vertex Blitz lighting, billboards (`PointEntity` toward the camera
   position), animated texture frames (`frame_atlas`); a menu sheet's translucent brushes
   draw in depth layers (Defold sorts meshes of one model by the model's origin).
-- **Generated data**: `generated/locations/l<N>.lua` (bounds, background, light, zones,
-  decorations), `generated/collections/location<N>.collection`, `generated/menus.lua`
-  (pickable menu items, the menu camera's flight), `generated/models.lua`,
-  `generated/render_passes.lua`, `generated/entities.go`, `generated/sounds.go` (groups
-  `music` / `sfx` for the volume settings).
+- **Generated data**: `generated/locations/l<N>.lua` (bounds, background, light, tower
+  tint, music, shadows, first raid, zones, decorations, location 1's clock) with the
+  `generated/locations.lua` index, `generated/collections/location<N>.collection`,
+  `generated/menus.lua` (pickable menu items, the menu camera's flight), `generated/models.lua`,
+  `generated/models/`, `generated/materials/`, `generated/go/`, `generated/render_passes.lua`,
+  `generated/common.lua` (the health bar gradient), `generated/entities.go`,
+  `generated/sounds.go` (groups `music` / `sfx` for the volume settings); `assets/hud/` is the
+  gui atlas cut from `gui.png`. The full list is in the docstring of
+  `../tools/targets/defold/export.py`.
 - **Icons**: the import stage's icon set (`../tools/icons.py`, from `../art/icon_1024.png`) gives `generated/icons/` (Android / iOS PNGs,
   macOS `.icns`, Windows `.ico`) and the bundle resources `generated/bundle/` (Android's
   adaptive icon, the web `favicon.ico`, linked into `index.html` by `tools/bob.sh web`).
@@ -153,9 +182,9 @@ sounds are encoded from the original (`../tools/audio.py`).
   `_floaddata`; past raid 200 the last raid repeats (the original read beyond its table).
 - `collectionproxy` `async_load` crashes the macOS engine (MoltenVK), so screens load
   synchronously behind the Loading plank.
-- Not ported: the demo / "buy now" screens, the `B3DEXT_ANIMBRUSH` colour/alpha keys
-  (only `death2.b3d`) and single-axis texture clamps; phone safe areas are not handled
-  (the 4:3 box keeps clear of a side notch).
+- Not ported: the demo / "buy now" screens and the `B3DEXT_ANIMBRUSH` colour/alpha keys
+  (only `death2.b3d`). Only the HUD's anchored groups respect the phone's safe area; the 4:3
+  box, the sheets and the gui are not inset (the box keeps clear of a side notch).
 - A raid whose first monster dies before the second spawns ends at once and its remaining
   monsters spill into the next raid — the original's `_fdeleteenemy` → `_fnextlevel`
   behaviour, reproduced by the Godot port too.

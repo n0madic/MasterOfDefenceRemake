@@ -68,7 +68,7 @@ var camera: Camera3D
 var music: VolumeSlider
 var sound: VolumeSlider
 var dragging := ""  # "" / music back name / sound back name
-var saved_slider := Ticker.DEFAULT_SLIDER
+var saved_fps := Ticker.NORMAL_FPS
 var closed := false
 
 
@@ -88,8 +88,8 @@ func open(cam: Camera3D) -> void:
 	music.set_volume(AudioManager.music_volume)
 	sound.set_volume(AudioManager.sound_volume)
 	# `_fshowingamemenu` runs the menu at 60 fps whatever the time slider says.
-	saved_slider = Ticker.slider
-	Ticker.slider = Ticker.DEFAULT_SLIDER
+	saved_fps = Ticker.fps()
+	Ticker.set_fps(Ticker.NORMAL_FPS)
 	Ticker.ticked.connect(_on_ticked)
 
 
@@ -162,7 +162,7 @@ func close() -> void:
 	closed = true
 	if Ticker.ticked.is_connected(_on_ticked):
 		Ticker.ticked.disconnect(_on_ticked)
-	Ticker.slider = saved_slider
+	Ticker.set_fps(saved_fps)
 	if menu != null:
 		menu.queue_free()
 	queue_free()

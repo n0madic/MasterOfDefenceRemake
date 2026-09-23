@@ -7,7 +7,7 @@ package.path = root .. "/defold/?.lua;" .. root .. "/defold/tests/?.lua;" .. pac
 local json = require("json")
 local data = require("sim.data")
 
-local TEST_FILES = {"test_core", "test_campaign", "test_tutorial", "test_balloon", "test_survival", "test_gesture", "test_camera_view", "test_hud_layout", "test_text", "test_model_pose"}
+local TEST_FILES = {"test_core", "test_campaign", "test_tutorial", "test_balloon", "test_survival", "test_gesture", "test_camera_view", "test_hud_layout", "test_text", "test_model_pose", "test_ticker"}
 
 local function read(path)
 	local f = assert(io.open(root .. "/godot" .. path, "rb"))

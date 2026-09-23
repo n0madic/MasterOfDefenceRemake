@@ -52,6 +52,8 @@ columns, y 32/48; text field (0x100b) — a block x 128–192, y 32–64 with co
 (380,380) (380,400) (520,380) (520,400), VSync (360,440)/(470,465), Windowed (380,520),
 Gamma (360,542)/(450,544,200), color (700,365) + radio (710,380) (710,400).
 
+<a id="3d-text"></a>
+
 ## 3D text [code: `_fetext3d`, `_ftextwidth`, `_ftextheight`]
 
 ```

@@ -1,7 +1,8 @@
-# Master of Defense — Godot remake
+# Master of Defense — remake (Godot and Defold)
 
 A fan-made, from-scratch remake of **Master of Defense** (Voodoo Dimention, 2006) — a
-Blitz3D tower-defense game — built for **Godot 4.7** (desktop, web, Android, iOS).
+Blitz3D tower-defense game — built for **Godot 4.7** (desktop, web, Android, iOS), with a
+second port to **Defold 1.13**.
 
 The remake is driven entirely by reverse-engineering the original: the game's binary
 (`Main.exe`) was decompiled and every rule (damage formulas, tick timing, spawn logic,
@@ -18,9 +19,12 @@ included in this repository.
 | Path | What it is |
 |---|---|
 | [`docs/`](docs/README.md) | Reverse-engineering notes on the original game: data formats, game rules, UI, HUD geometry, notes for the remake |
-| [`tools/`](tools/README.md) | Python pipeline: decompilation helpers, and the converters that turn the original's data/models/textures into Godot assets |
+| [`tools/`](tools/README.md) | Python pipeline: decompilation helpers, and the converters that turn the original's data/models/textures into Godot and Defold assets (a shared import stage into `build/import`, then one backend per port) |
 | [`godot/`](godot/README.md) | The remake itself (GDScript project) — simulation, scenes, HUD, tests |
-| [`defold/`](defold/README.md) | A second, complete port to Defold 1.13 (Lua; desktop, web, Android, iOS) whose assets are exported from the Godot pipeline's output |
+| [`defold/`](defold/README.md) | A second, complete port to Defold 1.13 (Lua; desktop, web, Android, iOS) whose assets come from the same pipeline (`tools/build_assets.py --target defold`) |
+| `art/` | `icon_1024.png`, the master of every launcher icon (re-rendered by `make icon`) |
+| `build/` | Generated, gitignored: the import stage's tree `build/import`, platform exports |
+| `reference/` | Generated locally by the [decompilation pipeline](tools/README.md#full-decompilation-pipeline) (`reference/decomp/*.c`, `reference/module/`) and gitignored — it is decompiled proprietary code, so the docs that cite it assume you ran the pipeline yourself |
 | `Makefile` | All the day-to-day commands (data pipeline, tests, running, platform exports) — run `make help` |
 
 ## Status
@@ -34,7 +38,9 @@ intentional deviations from the original.
 ## Prerequisites
 
 - [Godot 4.7.x](https://godotengine.org/) (the project pins `4.7`, Forward+ renderer)
-- Python 3.10+ (only needed to run the asset/data pipeline and its tests)
+- Python 3.10+ with `pip install -r tools/requirements.txt` (Pillow), plus `ffmpeg` (and
+  optionally `oggenc`) for the sounds — only needed to run the asset/data pipeline and its tests
+- [Defold 1.13](https://defold.com/) and `lua` — only for the Defold port and its tests
 - Your own copy of **Master of Defense** (`MasterOfDefense.exe`, the original Inno Setup
   installer), unpacked so that `MasterOfDefense_unpacked/Data/` sits at the repo root.
   Unpack the installer without running it, e.g. with
@@ -64,10 +70,22 @@ godot --path godot
 ## Tests
 
 ```bash
-make test          # both suites below
+make test          # all suites below
 make test-godot     # headless GDScript simulation/UI tests
 make test-tools     # Python tests for the conversion pipeline
+make test-sim       # Lua tests of the Defold port's simulation and runtime helpers (needs lua)
 ```
+
+## Defold port
+
+```bash
+make defold         # build its resources (defold/assets, generated, data)
+make defold-run     # build it with bob and run it on the desktop
+make defold-web     # → build/defold-web
+make defold-android # → build/defold-android
+```
+
+Details in [`defold/README.md`](defold/README.md).
 
 ## Building for other platforms
 
@@ -87,4 +105,5 @@ Compatibility rendering, keystores, the trimmed Android template, etc.) are in
 
 - [`docs/README.md`](docs/README.md) — how the original game actually works, reconstructed from its code
 - [`godot/README.md`](godot/README.md) — the remake's architecture, conventions, and every intentional deviation from the original
+- [`defold/README.md`](defold/README.md) — the Defold port: layout, exporter, differences from the Godot build
 - [`tools/README.md`](tools/README.md) — the decompilation and asset-conversion pipeline

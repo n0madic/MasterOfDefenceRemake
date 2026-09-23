@@ -649,9 +649,11 @@ local function on_key(self, action_id)
 	elseif action_id == hash("key_space") then
 		game.show_units_life = not game.show_units_life
 	elseif action_id == hash("key_n") then
-		set_slider(self, Ticker.DEFAULT_SLIDER)
+		self.ticker:set_normal_speed()
+		push_hud_state(self)
 	elseif action_id == hash("key_m") then
-		set_slider(self, Ticker.FAST_SLIDER)
+		self.ticker:set_fast_speed()
+		push_hud_state(self)
 	elseif action_id == hash("key_e") or action_id == hash("key_f2") then
 		toggle_skills(self, true)
 	elseif action_id == hash("key_delete") then

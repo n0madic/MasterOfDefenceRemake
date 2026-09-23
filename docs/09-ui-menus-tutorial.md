@@ -15,6 +15,8 @@ Scenes `Menu/env.b3d` (environment with trees/castle), `buttons.b3d`, `playgame.
 `Saves/Automatic.sav` exists. The submenu's "unfold" animation depends on `MenusOpened`
 (how many difficulties are unlocked). Textures `Titul1..3.png` — titles. Menu music `menu.ogg`.
 
+<a id="menu-animations"></a>
+
 ## Menu animations [code: `_floadmenu`, `_fshowmenu`, `_fhandlepunkts`, `_fcreatepunkt`]
 
 Every screen is a B3D scene placed 10 units in front of the camera (`PointEntity` toward the camera,
@@ -149,6 +151,8 @@ credits `Additional/end.b3d`;
 demo screen `Loader/demo.b3d` (`ngbuynow`, `ngexit`, `ngrestart`, `ngtomenu`).
 In-game menu `Menu/ingame.b3d`: `back`, `restart` (location), `tomenu`, `exit`,
 `help` (tutorial page 10), `music`/`sound` sliders.
+
+<a id="sounds"></a>
 
 ## Sounds [code: `_floadsounds`]
 

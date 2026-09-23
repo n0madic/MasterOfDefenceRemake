@@ -1,51 +1,84 @@
-# 12. Notes for the Godot remake and open questions
+# 12. What the remake does, and open questions
 
-## What to carry over as-is (the rule-core)
+The remake exists in two ports that share the rules and the asset pipeline: Godot 4.7
+([`godot/`](../godot/README.md), GDScript) and Defold 1.13 ([`defold/`](../defold/README.md),
+Lua). This page maps the research onto their code; the full architecture and every
+intentional deviation are in the two READMEs.
+
+## The rule-core, carried over as-is
 
 1. **Fixed tick with an integer period** `1000 \ (40 + slider)` ms (16 ms =
-   62.5 ticks/s by default) and all "per tick" constants (see [01](01-overview.md)).
-   In Godot: a dedicated millisecond accumulator in `_process` (`Ticker.gd`), not
-   `_physics_process` and not `Engine.time_scale`, so the period matches the original.
-2. The data in `docs/data/*.json` is exactly what the original reads. It's convenient to turn it
-   into Godot `Resource`s (units, towers, raids) — CSV tables with "label in the first
-   column" semantics.
-3. Damage/poison/fire/freeze/inhabitant formulas — see [04](04-enemies-raids.md),
-   [05](05-towers.md), [06](06-magic-skills.md). Especially non-obvious ones:
+   62.5 ticks/s by default) and all "per tick" constants (see [01](01-overview.md)): a
+   millisecond accumulator of its own, not `_physics_process` / `Engine.time_scale` —
+   `godot/src/autoload/Ticker.gd`, `defold/main/ticker.lua`. The hotkeys set the rate
+   directly, as `_fmainloop` does: M = 120 fps with the slider drawn at 100, N = 60.
+2. **Data**: `tools/game_data.py` turns the original's CSVs, paths and texts into
+   `data/*.json` (units, towers, raids with the survival table, paths, locations, texts,
+   plus the golden `hud_layout.json` / `path_times.json` from `docs/data`), in Godot
+   coordinates; the CSV semantics (label in the first column, integer truncation) are those
+   of `tools/export_csv.py`. Godot loads them in the `GameData` autoload
+   (`godot/src/autoload/GameData.gd`), Defold in `defold/sim/data.lua`; `godot/data/` is
+   committed and read by the headless tests of both ports.
+3. **Simulation**: a scene-free port of `_fgamelogic` — `godot/src/sim/` (`Game.gd` and the
+   object classes), `defold/sim/` (`game.lua` …). The damage/poison/fire/freeze/inhabitant
+   formulas follow [04](04-enemies-raids.md), [05](05-towers.md), [06](06-magic-skills.md),
+   including the non-obvious ones:
    - bullet damage `max(0, damage − armor)`; freeze overwrites the counter;
      poison/fire only applies if the new duration is longer than the current one;
    - skills multiply prototypes **cumulatively** (Π(1+0.005k));
    - upgrade parameters take effect after the animation (100 ticks);
    - inhabitants lost = `Round(life% / (3·res+33))`, boss ×5;
-   - health auto-balance based on inhabitants lost (`_fhandlebalance`).
-4. Path movement: a marker "guide" that advances by `speed/4` frame while
-   the enemy is closer than 1 unit. Since the key spacing on every location is > 4 units,
-   the resulting speed is ≈ `speed` units/tick, and the travel time is ≈ `length/speed` (table and simulator —
-   [03](03-levels-locations.md#enemy-path-path1b3d), `tools/simulate_path.py`).
-   For the remake this can be replaced with movement along a `Path3D`/`Curve3D` at a constant
-   speed of `speed`; the end of the path is one frame step before the last key.
+   - health auto-balance based on inhabitants lost (`_fhandlebalance`, `Balance.gd`);
+   - numbers: round-to-even (`Blitz.round_int`) and emulated float32 accumulators
+     (`Blitz.f32`), seedable `Rand`/`Rnd` with Blitz's range semantics (Godot wraps the
+     engine's generator, Defold reimplements Blitz's own, so sequences differ between ports).
+4. **Path movement** is the original's, not a curve at constant speed: the enemy chases a
+   marker "guide" that advances by `speed/4` frame while the enemy is closer than 1 unit
+   (`godot/src/sim/PathFollower.gd`, `defold/sim/path_follower.lua`, both ports of
+   `tools/simulate_path.py`). With key spacing > 4 units the speed is ≈ `speed`
+   units/tick and the travel time ≈ `length/speed`
+   ([03](03-levels-locations.md#enemy-path-path1b3d), `data/path_times.json` as the test oracle).
 
 ## Assets
 
-- B3D → glTF: import into Blender via the `io_scene_b3d` add-on (or a custom converter built on
-  `tools/b3d_dump.py`), then export glTF. It's important to keep the node names
-  (`grass`, `road`, `noparking`, `rocks`, `river`, `border`, `door`, `fire1`, `dno`)
-  and the tower animations (sequences of 10 frames).
-- MD2 → glTF: `noesis`/the Blender MD2 add-on; 11 walk frames.
-- Enemy paths have already been dumped to `data/enemy_paths.json` (world coordinates, frame →
-  point); they can be loaded directly into a `Curve3D`.
-- Texts are in cp1251, with `<vd>` and `<colR=…>` tags — replace with BBCode.
+One pipeline builds both ports from the unpacked original: `tools/build_assets.py --target
+godot|defold|all` (`make assets`). Its import stage (`tools/source_import.py`) converts
+everything once into `build/import/`; the targets `tools/targets/godot.py` and
+`tools/targets/defold/` take it from there. Details in [`tools/README.md`](../tools/README.md).
 
-## What not to carry over / known original quirks
+- **B3D → glb**: `tools/b3d2gltf.py`, a custom converter on top of the `tools/b3dlib.py`
+  parser. Node names (`grass`, `road`, `noparking`, `rocks`, `river`, `border`, `door`,
+  `fire1`, `dno`) and the tower animations (sequences of 10 frames) are kept; BONE bones
+  become a glTF skin; what glTF cannot say (blend modes, EntityOrder, lightmaps, tags) goes
+  into a `*.b3d.json` sidecar, applied by Godot's `addons/b3d_import/b3d_post_import.gd`
+  and by the Defold exporter. The coordinate, winding and colour conventions are in
+  [`godot/README.md`](../godot/README.md#conventions) (C1–C4, `tools/blitzconv.py`).
+- **MD2 → glb**: `tools/md2togltf.py`, frames as morph targets (frame k at t = k); 11 walk frames.
+- **Enemy paths**: `data/paths.json` (keys and rotations per frame), the same points as
+  `docs/data/enemy_paths.json`.
+- **Texts**: decoded from cp1251, `<vd>` becomes a line break and long lines are wrapped as
+  `_faddvdtags` does; the `<colR=nnn><colG=nnn><colB=nnn>` colour tags stay and are drawn by
+  the ports' own `EText3D` layout on the 16×16 glyphs of `gui.png` (`BlitzText.gd`,
+  `defold/main/blitz_text.lua`, see [13](13-hud-geometry.md#3d-text)).
+- **Menus** are the original's 3D sheets (`Menu/*.b3d`) with item picking and the `sel.b3d`
+  cursor, not redrawn 2D screens ([09](09-ui-menus-tutorial.md#menu-animations)).
 
-- CRC check of the CSVs (`_fcheckgamefiles`), demo mode, affiliate links,
-  submitting high scores to the browser.
-- `Tower6.csv`, comment rows in the CSVs, `Splash`, raids 181–205, survival
-  columns 201–255 — dead data.
-- The flying-monster counter in survival is unused; `eagle.wav` is missing.
+## Original quirks: dropped and kept
+
+- **Not carried over**: the CRC check of the CSVs (`_fcheckgamefiles`), demo mode and the
+  "buy now" screens, affiliate links, submitting high scores to the browser (both ports
+  keep two local top-10 tables instead).
+- **Dead data**, ignored: `Tower6.csv`, comment rows in the CSVs, `Splash`, raids 181–205,
+  survival columns 201–255; the flying-monster counter in survival.
+- **Missing file**: `eagle.wav` — the eagle's screech is skipped.
+- **Kept**: a raid counts as repulsed once no living non-inhabitant is left, even before
+  every monster has spawned (`_fdeleteenemy` → `_fnextlevel`); the rest spill into the next raid.
+- **Kept, optional**: after loading a save the original recomputes the attack speed of
+  existing towers incorrectly (×upgrader^level instead of the cumulative product, see
+  [06](06-magic-skills.md)); Godot's `reproduce_original_bugs` flag (off by default) restores it.
+- **Hotkey M** sets the fps to 120 but draws the slider at 100 (where dragging would give
+  140); both ports reproduce that.
 - The help text claiming "income depends on inhabitants" is wrong for the campaign.
-- Hotkey M sets the slider to 100 (=140 Hz), but the fps is 120 — a discrepancy.
-- After loading a save, the attack speed of existing towers is recomputed incorrectly
-  (×upgrader^level instead of the cumulative product) — see [06](06-magic-skills.md).
 - This unpacked build is a demo build by its marker byte (`0x3C` instead of `0x3D`), see [01](01-overview.md).
 
 ## Closed questions
