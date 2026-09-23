@@ -12,6 +12,7 @@ const DEATH_MODEL := "res://assets/models/Towers/death.glb"
 const DEATH2_MODEL := "res://assets/models/Towers/death2.glb"
 const BOMB_MODEL := "res://assets/models/Towers/military3.glb"
 const HERE_MODEL := "res://assets/models/Towers/here.glb"
+const ENEMY_SELECTION_MODEL := "res://assets/models/Towers/selmonster.glb"
 const BALLOON_MODEL := "res://assets/models/Towers/Balloon.glb"
 const WATER_TEXTURE := "res://assets/textures/Water.jpg"
 const BORDER_TEXTURE := "res://assets/textures/border.jpg"
@@ -85,6 +86,11 @@ var here_marker: Node3D = null
 var here_player: AnimationPlayer = null
 var here_time := -1.0
 var bomb_views: Dictionary = {}
+## `_vselectionmonstermesh`: the ring under the selected monster, the monster it rides and
+## its rotation relative to that monster (see `_sync_enemy_selection`).
+var enemy_selection: Node3D = null
+var enemy_selection_for: SimEnemy = null
+var enemy_selection_local := Basis.IDENTITY
 # Decorations (`_fdecoratelocation` / `_fhandledecorates`): clock hands on location 1,
 # the eagle circling on location 2.
 var clock_hands: Array = []
@@ -118,6 +124,10 @@ func _ready() -> void:
 	entities = Node3D.new()
 	entities.name = "Entities"
 	add_child(entities)
+	enemy_selection = load(ENEMY_SELECTION_MODEL).instantiate()
+	BlitzAnimator.hide_helpers(enemy_selection)
+	entities.add_child(enemy_selection)
+	enemy_selection.visible = false
 
 
 ## The clock is followed only while in the tree (see `_exit_tree`).
@@ -443,6 +453,7 @@ func _on_frame_ticked(ticks: int) -> void:
 	var cam := camera_rig.camera
 	for v in enemy_views.values():
 		v.sync(cam, game.show_units_life, ticks)
+	_sync_enemy_selection()
 	preview_anim_time = fmod(preview_anim_time + SimTower.ANIM_SPEED * ticks, float(SimTower.SEQ_FRAMES))
 	var uv_driver := {}  # type -> frame of the first tower of that type (`_fupdateextanims`)
 	for t in PREVIEW_TOWER_TYPES:
@@ -470,6 +481,22 @@ func _on_frame_ticked(ticks: int) -> void:
 	_tick_decorations(ticks)
 	_tick_balloon(ticks)
 	_tick_placement(mouse)
+
+
+## `_fselectenemy` moves the ring to the monster and parents it keeping its world transform
+## (`_fdeselectallenemies` unparents it the same way): from the pick on it follows the
+## monster's moves and turns. It is hidden with the monster it rides.
+func _sync_enemy_selection() -> void:
+	var e := game.selected_enemy
+	var v: EnemyView = enemy_views.get(e.id) if e != null else null
+	enemy_selection.visible = v != null and v.visible
+	if v == null:
+		enemy_selection_for = null
+		return
+	if enemy_selection_for != e:
+		enemy_selection_for = e
+		enemy_selection_local = v.global_basis.inverse() * enemy_selection.global_basis
+	enemy_selection.global_transform = Transform3D(v.global_basis * enemy_selection_local, v.global_position)
 
 
 ## `_fupdatelocation` + `Animate(scene, 1, 1, 0)`: river/border atlases and scene keys.
@@ -643,18 +670,20 @@ func _left_click(pos: Vector2) -> void:
 				tower_placed.emit(t)
 				selection_changed.emit()
 		return
-	var hit := picker.pick(camera_rig.camera, pos, Picker.mask([Picker.LAYER_TOWERS]))
-	if hit.has("tower"):
-		var t := game.find_tower(int(hit["tower"]))
-		if t != null and not t.selected:
-			game.select_tower(t)
-			selection_changed.emit()
-		return
-	hit = picker.pick(camera_rig.camera, pos, Picker.mask([Picker.LAYER_ENEMIES]))
+	# `_fhandletowers` picks a tower, then `_fhandleenemyselection` a monster in the same
+	# click: a monster under the cursor wins.
+	var hit := picker.pick(camera_rig.camera, pos, Picker.mask([Picker.LAYER_ENEMIES]))
 	if hit.has("enemy"):
 		var e := game.find_enemy(int(hit["enemy"]))
 		if e != null:
 			game.select_enemy(e)
+			selection_changed.emit()
+			return
+	hit = picker.pick(camera_rig.camera, pos, Picker.mask([Picker.LAYER_TOWERS]))
+	if hit.has("tower"):
+		var t := game.find_tower(int(hit["tower"]))
+		if t != null and not t.selected:
+			game.select_tower(t)
 			selection_changed.emit()
 
 

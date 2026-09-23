@@ -264,15 +264,23 @@ function M.tip_for(game, w)
 	return d:text(k)
 end
 
+-- `_fshowenemyinfoondisplay`: every line opens with `<vd>`, so the text starts a line
+-- below the time slider, as the tower's does; a life of 8+ digits loses the space after
+-- its colon. Texts 72 / 73 are the whole "Type: ground" / "Type: air" line.
+function M.enemy_info(game, e)
+	local d = game.data
+	local life = tostring(blitz.round_int(e.life))
+	return string.format("\n%s:%s%s\n%s: %d\n%s: %d\n%s", d:text(69), #life < 8 and " " or "", life, d:text(70), e.armor,
+		d:text(71), math.floor(e.speed * 100), d:text(e.air and 73 or 72))
+end
+
 -- `_ftowerinfo` / `_fshowenemyinfoondisplay` for the info panel.
 function M.info_text(game)
-	local d = game.data
 	local t, e = game.selected_tower, game.selected_enemy
 	if t then
 		return M.tower_info(game, t.type, t.level)
 	elseif e then
-		return string.format("%s: %d\n%s: %d\n%s: %d\n%s", d:text(69), blitz.round_int(e.life), d:text(70), e.armor,
-			d:text(71), math.floor(e.speed * 100), d:text(e.air and 73 or 72))
+		return M.enemy_info(game, e)
 	end
 	return ""
 end

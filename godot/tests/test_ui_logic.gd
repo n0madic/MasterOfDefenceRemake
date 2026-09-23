@@ -225,6 +225,19 @@ func test_loading_sheet_keeps_its_world_pose_in_front_of_the_camera() -> void:
 
 ## Detached location screen parts stop listening to the clock at once (quick load,
 ## restart): a tick between `remove_child` and the deferred free must not reach them.
+func test_enemy_info_starts_below_the_time_slider() -> void:
+	game.start_campaign(0)
+	var hud := Hud.new()
+	hud.game = game
+	hud.data = game.data
+	var e := dummy_enemy(Vector3.ZERO, false, 90.0, 6)
+	var text := hud.enemy_info(e)
+	check(text.begins_with("\n%s: 90\n" % game.data.text(69)), "an empty first line, then the life")
+	e.life = 12345678.0
+	check(hud.enemy_info(e).begins_with("\n%s:12345678\n" % game.data.text(69)), "no space before an 8-digit life")
+	hud.free()
+
+
 func test_location_view_and_hud_leave_the_ticker_on_exit() -> void:
 	var view := LocationView.new()
 	var hud := Hud.new()

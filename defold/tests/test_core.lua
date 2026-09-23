@@ -107,6 +107,36 @@ do
 	check(stopped.target == nil, "a stopped tower drops its stale target")
 end
 
+-- `_fhandleenemyselection` / `_fselecttower`: one selection at a time; an inhabitant is
+-- selected but never becomes the towers' target.
+do
+	local WORKER_UNIT = 32  -- Male
+	local sg = Game.new(d, 3)
+	sg:start_campaign(0, 1)
+	sg.gold = 1000
+	local e = sg:create_enemy(false, 1)
+	local t = sg:build_tower(data.TOWER_LAND, {x = e.path.body.x + 30, y = 0, z = e.path.body.z})
+	sg:select_tower(t)
+	sg:select_enemy(e)
+	check(sg.selected_enemy == e and e.selected, "the monster is selected")
+	check(t.target == e, "the selected monster becomes every tower's target")
+	check(sg.selected_tower == nil and not t.selected, "selecting a monster drops the tower")
+	sg:select_tower(t)
+	check(sg.selected_enemy == nil and not e.selected, "selecting a tower drops the monster")
+	t.target = nil
+	local worker = sg:create_enemy(false, WORKER_UNIT)
+	check(worker.worker, "unit 32 is an inhabitant")
+	sg:select_enemy(worker)
+	check(sg.selected_enemy == worker and t.target == nil, "a selected inhabitant is not targeted")
+	-- `_fshowenemyinfoondisplay`: the text opens with a line break (the time slider covers
+	-- the first line); an 8-digit life loses the space after the colon.
+	local hud = require("main.location.hud_model")
+	e.life = 90
+	check(hud.enemy_info(sg, e):find("\n" .. d:text(69) .. ": 90\n", 1, true) == 1, "enemy info starts below the slider")
+	e.life = 12345678
+	check(hud.enemy_info(sg, e):find("\n" .. d:text(69) .. ":12345678\n", 1, true) == 1, "no space before an 8-digit life")
+end
+
 -- Skills
 g.experience = 500
 local sk = g.skills

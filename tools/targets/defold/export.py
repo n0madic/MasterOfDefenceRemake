@@ -53,7 +53,7 @@ ZONE_NODES = ["grass", "road", "noparking", "rocks"]
 TOWER_MODELS = ["Military", "Magic", "Nature", "Freeze", "Fire"]
 TOWER_EXTRAS = ["MilitaryPlace", "MagicPlace", "NaturePlace", "FreezePlace", "FirePlace",
                 "MilitaryEff", "MagicEff", "NatureEff", "FreezeEff", "PoisonEff",
-                "range", "selection", "shadow", "death", "Balloon", "here"]
+                "range", "selection", "selmonster", "shadow", "death", "Balloon", "here"]
 BULLET_MODELS = [f"{t}{i}" for t in ("military", "magic", "nature", "freeze") for i in range(1, 6)]
 ROOT_MODELS = ["health", "Env", "faces"]
 HUD_MODELS = ("Env", "faces")

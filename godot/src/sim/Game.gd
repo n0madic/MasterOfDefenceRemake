@@ -578,10 +578,12 @@ func delete_tower(t: SimTower) -> void:
 	tower_removed.emit(t)
 
 
+## `_fselecttower`: also drops the monster selection.
 func select_tower(t: SimTower) -> void:
 	deselect_all_towers()
 	t.selected = true
 	selected_tower = t
+	deselect_enemy()
 
 
 func deselect_all_towers() -> void:
@@ -590,13 +592,16 @@ func deselect_all_towers() -> void:
 	selected_tower = null
 
 
-## `_fhandleenemyselection`: the picked monster becomes every tower's target.
+## `_fhandleenemyselection`: the picked monster becomes every tower's target (an inhabitant
+## is selected but never targeted); the tower selection is dropped.
 func select_enemy(e: SimEnemy) -> void:
+	if not e.worker:
+		for t in towers:
+			t.target = e
 	deselect_enemy()
 	e.selected = true
 	selected_enemy = e
-	for t in towers:
-		t.target = e
+	deselect_all_towers()
 
 
 func deselect_enemy() -> void:

@@ -565,17 +565,17 @@ local function map_left_click(self)
 		end
 		return
 	end
+	-- `_fhandletowers` picks a tower, then `_fhandleenemyselection` a monster in the same
+	-- click: a monster under the cursor wins.
 	local o, d = camera_ray(self)
-	local t = picking.pick_tower(game.towers, o, d)
-	if t then
-		if not t.selected then
-			game:select_tower(t)
-		end
-		return
-	end
 	local e = picking.pick_enemy(game.enemies, o, d)
 	if e then
 		game:select_enemy(e)
+		return
+	end
+	local t = picking.pick_tower(game.towers, o, d)
+	if t and not t.selected then
+		game:select_tower(t)
 	end
 end
 

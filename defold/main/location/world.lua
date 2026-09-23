@@ -21,6 +21,8 @@ local BALLOON_ANIM_SPEED = 0.03
 local HERE_ANIM_SPEED = 0.5
 local BALLOON_SHADOW_Y = 0.01
 local BOMB_BLAST_SCALE = 1.2  -- `landExpl` scaled 1.2
+local ENEMY_SELECTION_MODEL = "Towers/selmonster"
+local HIDDEN_POSITION = vmath.vector3(0, -100, 0)
 
 -- `location`: generated/locations entry; `ground_texture`: the tower base texture.
 function M.new(game_data, location, ground_texture)
@@ -41,6 +43,9 @@ function M.new(game_data, location, ground_texture)
 	end
 	self.faces = model.spawn("faces", PANEL_OFFSET, vmath.quat(), 1)
 	model.set_enabled(self.faces, false)
+	-- `_vselectionmonstermesh`: the ring under the selected monster.
+	self.enemy_selection = {obj = model.spawn(ENEMY_SELECTION_MODEL, HIDDEN_POSITION, vmath.quat(), 1), rotation = vmath.quat()}
+	model.set_enabled(self.enemy_selection.obj, false)
 	-- The location's own scene (instance `scene` of the location collection) and the frame
 	-- clocks of its animated textures (`_fupdatelocation`: river and border).
 	self.scene = model.attach(go.get_id("scene"), "Location" .. location.location)
@@ -183,12 +188,35 @@ function M:set_skills_panel(shown)
 	end
 end
 
+-- `_fselectenemy` moves the ring to the monster and parents it keeping its world transform
+-- (`_fdeselectallenemies` unparents it the same way): from the pick on it follows the
+-- monster's moves and turns. It is hidden with the monster it rides.
+function M:sync_enemy_selection(game)
+	local sel = self.enemy_selection
+	local e = game.selected_enemy
+	local v = e and self.enemies[e]
+	model.set_enabled(sel.obj, v ~= nil and not v.hidden)
+	if not v then
+		sel.enemy = nil
+		return
+	end
+	local rot = model.facing_rotation(e.path.facing)
+	if sel.enemy ~= e then
+		sel.enemy = e
+		sel.local_rotation = vmath.conj(rot) * sel.rotation
+	end
+	sel.rotation = rot * sel.local_rotation
+	go.set_position(model.vec(e.path.body), sel.obj.id)
+	go.set_rotation(sel.rotation, sel.obj.id)
+end
+
 -- Sync every view to the simulation after `ticks` ticks; `cam_rot` turns the health bars.
 function M:sync(game, ticks, cam_rot)
 	self:sync_scene(ticks)
 	for _, v in pairs(self.enemies) do
 		enemy_view.sync(v, cam_rot, game.show_units_life, common.gradient, ticks)
 	end
+	self:sync_enemy_selection(game)
 	-- `_fupdateextanims`: the shared texture of a tower type scrolls with its first tower;
 	-- Icerock / Flame follow the hidden level-0 preview tower's idle loop.
 	self.preview_anim_time = (self.preview_anim_time + Game.ANIM_SPEED * ticks) % Game.SEQ_FRAMES

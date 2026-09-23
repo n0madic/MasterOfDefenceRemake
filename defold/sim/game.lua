@@ -728,10 +728,12 @@ function M:delete_tower(t)
 	self:emit({type = "tower_removed", tower = t})
 end
 
+-- `_fselecttower`: also drops the monster selection.
 function M:select_tower(t)
 	self:deselect_all_towers()
 	t.selected = true
 	self.selected_tower = t
+	self:deselect_enemy()
 end
 
 function M:deselect_all_towers()
@@ -741,14 +743,18 @@ function M:deselect_all_towers()
 	self.selected_tower = nil
 end
 
--- `_fhandleenemyselection`: the picked monster becomes every tower's target.
+-- `_fhandleenemyselection`: the picked monster becomes every tower's target (an inhabitant
+-- is selected but never targeted); the tower selection is dropped.
 function M:select_enemy(e)
+	if not e.worker then
+		for _, t in ipairs(self.towers) do
+			t.target = e
+		end
+	end
 	self:deselect_enemy()
 	e.selected = true
 	self.selected_enemy = e
-	for _, t in ipairs(self.towers) do
-		t.target = e
-	end
+	self:deselect_all_towers()
 end
 
 function M:deselect_enemy()

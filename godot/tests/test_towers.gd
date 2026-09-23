@@ -1,6 +1,7 @@
 extends SimTestCase
 
 const ORIGIN := Vector3(60, 0, -20)
+const WORKER_UNIT := 32  # Male, an inhabitant
 
 
 func setup() -> void:
@@ -113,6 +114,27 @@ func test_nearest_target_method_1_and_selection_priority() -> void:
 	game.select_enemy(far)
 	run_ticks(70)
 	check(t.target == far, "selected enemy has priority")
+
+
+func test_enemy_and_tower_selection_exclude_each_other() -> void:
+	var t := game.build_tower(GameData.TOWER_LAND, ORIGIN)
+	var e := dummy_enemy(ORIGIN + Vector3(30, 0, 0))
+	game.select_tower(t)
+	game.select_enemy(e)
+	check(game.selected_enemy == e and e.selected, "the monster is selected")
+	check(t.target == e, "the selected monster becomes every tower's target")
+	check(game.selected_tower == null and not t.selected, "selecting a monster drops the tower")
+	game.select_tower(t)
+	check(game.selected_enemy == null and not e.selected, "selecting a tower drops the monster")
+
+
+func test_selected_worker_is_not_targeted() -> void:
+	var t := game.build_tower(GameData.TOWER_LAND, ORIGIN)
+	var worker := game.create_enemy(false, WORKER_UNIT)
+	check(worker.worker, "unit %d is an inhabitant" % WORKER_UNIT)
+	game.select_enemy(worker)
+	check(game.selected_enemy == worker, "an inhabitant can be selected")
+	check(t.target == null, "but the towers do not take it as their target")
 
 
 func test_type_restrictions() -> void:

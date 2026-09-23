@@ -30,7 +30,7 @@ const FIXED_PATHS: Array[String] = [
 	EnemyView.HEALTH_MODEL, EnemyView.SHADOW_MODEL, EnemyView.FIRE_EFFECT, EnemyView.POISON_EFFECT,
 	TowerView.RANGE_MODEL, TowerView.SELECTION_MODEL,
 	LocationView.DEATH_MODEL, LocationView.DEATH2_MODEL, LocationView.BOMB_MODEL,
-	LocationView.HERE_MODEL, LocationView.BALLOON_MODEL, Hud.FACES_MODEL,
+	LocationView.HERE_MODEL, LocationView.ENEMY_SELECTION_MODEL, LocationView.BALLOON_MODEL, Hud.FACES_MODEL,
 ]
 
 static var _pinned: Dictionary = {}  # path -> PackedScene / Texture2D

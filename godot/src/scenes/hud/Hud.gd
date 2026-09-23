@@ -598,10 +598,7 @@ func refresh_info_panel() -> void:
 		buttons["stop"].visible = t.freeze * game.skills.cold_magic > 0
 		buttons["stop"].set_meta("tip", 101 if t.stopped else 100)
 	elif e != null:
-		# `_fshowenemyinfoondisplay`: texts 72 / 73 are the whole "Type: ground" / "Type: air" line.
-		info_text.text = "%s: %d\n%s: %d\n%s: %d\n%s" % [
-			data.text(69), Blitz.round_int(e.life), data.text(70), e.armor, data.text(71), int(e.speed * 100.0),
-			data.text(73 if e.air else 72)]
+		info_text.text = enemy_info(e)
 		faces.visible = true
 		var frame := WORKER_PORTRAIT_FRAME if e.worker else float(e.unit_id - 1)
 		BlitzAnimator.seek(faces_player, frame)
@@ -613,6 +610,16 @@ func refresh_info_panel() -> void:
 
 ## `_ftowerinfo(type, level, showCost)`: text of the tower panel and tooltips, built from
 ## the (skill-scaled) prototypes. `level < 0` = build tooltip (cost of level 0, no range).
+## `_fshowenemyinfoondisplay`: every line opens with `<vd>`, so the text starts a line below
+## the time slider, as the tower's does; a life of 8+ digits loses the space after its colon.
+## Texts 72 / 73 are the whole "Type: ground" / "Type: air" line.
+func enemy_info(e: SimEnemy) -> String:
+	var life := str(Blitz.round_int(e.life))
+	return "\n%s:%s%s\n%s: %d\n%s: %d\n%s" % [
+		data.text(69), " " if life.length() < 8 else "", life, data.text(70), e.armor, data.text(71),
+		int(e.speed * 100.0), data.text(73 if e.air else 72)]
+
+
 func tower_info(type: int, level: int, show_cost: bool = false) -> String:
 	const GOLD := "<colR=255><colG=203><colB=000>"
 	const WHITE := "<colR=255><colG=255><colB=255>"
