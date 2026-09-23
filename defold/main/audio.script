@@ -24,7 +24,10 @@ function init(self)
 end
 
 function update(self)
-	self.played = {}
+	-- A new table only after a frame that played something (most frames play nothing).
+	if next(self.played) then
+		self.played = {}
+	end
 end
 
 function on_message(self, message_id, message)

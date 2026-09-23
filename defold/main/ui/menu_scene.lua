@@ -94,7 +94,9 @@ function M.new(id, key, items, cursor_id)
 end
 
 function M:pose()
-	model.pose(self.obj, self.time, self.hidden, self.offsets)
+	-- Empty sets pose plainly: model.pose then skips an unchanged frame and resends only the
+	-- animated joints.
+	model.pose(self.obj, self.time, next(self.hidden) and self.hidden or nil, next(self.offsets) and self.offsets or nil)
 end
 
 -- Move node `name` and its children by `delta` in the sheet's space, through the whole

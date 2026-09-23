@@ -73,13 +73,13 @@ pipeline: data assets import ## Full pipeline: data + assets + import
 defold: ## Export all locations + entities for the Defold port (defold/, needs godot/assets and data)
 	$(PYTHON) defold/tools/export_defold.py
 
-defold-run: defold ## Build the Defold port with bob and run it (ARGS="--config=main.demo=1")
+defold-run: defold ## Build the Defold port with bob and run it (ARGS="--config=main.demo=1", VARIANT=debug for the log)
 	defold/tools/bob.sh run $(ARGS)
 
 defold-web: defold ## Bundle the Defold port for the browser into build/defold-web
 	defold/tools/bob.sh web
 
-defold-android: defold ## Bundle the Defold port as a debug .apk into build/defold-android
+defold-android: defold ## Bundle the Defold port as an .apk (debug keystore) into build/defold-android
 	defold/tools/bob.sh android
 
 # --- Icons ---------------------------------------------------------------------------------

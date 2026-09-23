@@ -12,10 +12,13 @@ local function vec4(v, w)
 	return vmath.vector4(v[1], v[2], v[3], w)
 end
 
--- `scene`: {clear_color, light, max_aspect (default 4:3)}.
+-- `scene`: {clear_color, light, max_aspect (default 4:3)}. The screen is named by the
+-- collection of the calling script (its URL's socket), which picks the render script's
+-- passes for it (generated/render_passes.lua `screens`).
 function M.set(scene)
 	local l = scene.light
 	local message = {
+		screen = msg.url().socket,
 		clear_color = vec4(scene.clear_color, 1),
 		light_dir = vec4(l.dir, 0), light_color = vec4(l.color, 1), ambient = vec4(l.ambient, 1),
 		max_aspect = scene.max_aspect or screen.ASPECT,

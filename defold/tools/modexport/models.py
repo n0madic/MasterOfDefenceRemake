@@ -783,13 +783,13 @@ class ModelExporter:
                 if uri:
                     model += ["  textures {", f'    sampler: "{v.sampler_name(i)}"', f'    texture: "{self.texture_resource(uri)}"', "  }"]
             model.append("}")
-        if rigged:
-            # The sheared model keeps the skeleton/animation (so the vertex format has the
-            # joint index) but no `default_animation`, so Defold leaves the rig at the bind
-            # pose and the `bone_matrices` constant alone drives the mesh.
-            model += [f'skeleton: "/assets/models/{self.slug}{glb_suffix}.glb"', f'animations: "/assets/models/{self.slug}{glb_suffix}.glb"']
-            if not self.bone_posed:
-                model.append('default_animation: "b3d"')
+        # A bone-posed model declares no skeleton: its `bone_matrices` constant alone drives
+        # the mesh, and the joint index still reaches `bone_indices` from the glb's skin. A
+        # skeleton would give it a rig the engine poses every frame and uploads into the
+        # bone matrix texture (the menu's sheets: half of the menu's CPU time).
+        if rigged and not self.bone_posed:
+            model += [f'skeleton: "/assets/models/{self.slug}{glb_suffix}.glb"', f'animations: "/assets/models/{self.slug}{glb_suffix}.glb"',
+                      'default_animation: "b3d"']
         model.append("create_go_bones: false")
         (model_dir / f"{model_name}.model").write_text("\n".join(model) + "\n")
 

@@ -18,14 +18,18 @@ make pipeline          # once: B3D/MD2/textures/sounds -> godot/assets, tables -
 make defold            # export every location, the menus and the entities into defold/
 make defold-run        # bob build + dmengine (ARGS="--config=main.location=3")
 make defold-web        # browser bundle -> build/defold-web (serve it over http)
-make defold-android    # .apk -> build/defold-android (VARIANT=release for a release engine)
+make defold-android    # .apk -> build/defold-android
 defold/tools/bob.sh ios   # needs IOS_IDENTITY and IOS_PROVISIONING
 make test-sim          # the Lua simulation's headless tests (plain `lua`)
 ```
 
 Or open `defold/` in the Defold editor after `make defold` (the bootstrap collection
 refers to generated files). `tools/bob.sh` downloads `bob.jar` / `dmengine` matching the
-installed editor's engine SHA into `build/defold-tools`.
+installed editor's engine SHA into `build/defold-tools`. Every command builds and runs the
+release engine (no log, profiler or debug web server); `VARIANT=debug` (e.g.
+`VARIANT=debug make defold-run`) takes the debug one, which prints the log and the
+`log_level=debug` output. bob 1.13.1's BasisU encoder now and then deadlocks: `bob.sh`
+kills a build whose CPU time stops for `BOB_STALL_SECONDS` (60) and retries it.
 
 Size: `tools/bob.sh` builds with `--texture-compression`, so `render/level.texture_profiles`
 applies: textures ship as Basis UASTC (RGB for the jpg ones), transcoded at load to what the

@@ -14,7 +14,8 @@ Reads `godot/assets` (glb models with `.b3d.json` sidecars, textures, sounds) an
   camera bounds, background colour, scene light, tower tint, music, build zones;
 - `generated/collections/location<N>.collection` -- a location's scene plus the location
   screen's game objects (main/location/), loaded by a collection proxy;
-- `generated/render_passes.lua` -- the draw passes, the union over every scene;
+- `generated/render_passes.lua` -- the draw passes, the union over every scene, and the
+  passes each screen's materials match;
 - `generated/common.lua` -- the health bar gradient;
 - `generated/models.lua` -- per model: game object, animation length, groups, ANIMMAP keys;
 - `generated/entities.go` -- one factory per model;
@@ -27,6 +28,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import shutil
 import subprocess
 import sys
@@ -95,6 +97,18 @@ SOUND_EXTENSIONS = (".wav", ".ogg")
 # Sound groups (sound.set_group_gain): the music and effects volume settings.
 SOUND_GROUP_MUSIC, SOUND_GROUP_SFX = "music", "sfx"
 LOOPED_SOUNDS = ("tlen", "water")
+# The project's own (hand-written) resources, next to the exported ones.
+PROJECT_DIR = ROOT / "defold"
+EXPORTED_DIRS = ("/generated/", "/assets/")
+# The screens: the collections the controller loads through its collection proxies.
+CONTROLLER_GO = "/main/controller.go"
+PROXY_COLLECTION = re.compile(r'collection: \\"(/[\w./-]+\.collection)\\"')
+# A reference to a resource: any component, sub-collection, factory prototype or material
+# can bring materials into a screen. Binary assets are not read for further references.
+RESOURCE_REFERENCE = re.compile(r"(/[\w./-]+\.\w+)")
+BINARY_RESOURCES = (".glb", ".gltf", ".png", ".jpg", ".jpeg", ".wav", ".ogg", ".bin", ".ttf", ".otf")
+MATERIAL_TAG = re.compile(r'^tags: "([^"]+)"', re.M)
+COLLECTION_NAME = re.compile(r'^name: "([^"]+)"', re.M)
 
 
 def quat_rotate(q: list[float], v: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -270,6 +284,8 @@ class Exporter:
         self.models: dict[str, dict] = {}
         self.location_info = json.loads((godot_dir / "data" / "locations.json").read_text())
         self.pass_tags: set[str] = set()   # the order tag of every material exported
+        self.placed: set[str] = set()      # models instanced by the screens' collections
+        self.links: dict[str, tuple[frozenset[str] | None, list[str]]] = {}  # see resource_links
         self.menus: dict[str, dict] = {}   # menu model key -> pick triangles
 
     @staticmethod
@@ -316,20 +332,24 @@ class Exporter:
 
     # --- models --------------------------------------------------------------------------
 
-    def export_model(self, key: str, glb: Path, **options) -> ModelExporter:
+    def export_model(self, key: str, glb: Path, placed: bool = False, **options) -> ModelExporter:
+        """`placed`: the model is an instance in a screen's collection (a location scene, a
+        clock hand, a menu sheet or world), never spawned, so it gets no factory."""
         exporter = ModelExporter(key, glb, load_sidecar(glb), self.out, self.textures_dir, **options)
         meta = exporter.run()
         self.textures.update(meta.pop("textures"))
         self.models[key] = meta
+        if placed:
+            self.placed.add(key)
         self.pass_tags |= {v.tags[0] for v in exporter.variants.values()}
         return exporter
 
     def export_models(self) -> None:
         for location in self.locations:
             hands = CLOCK_HANDS.get(location, {})
-            self.export_model(f"Location{location}", self.location_glb(location), exclude_nodes=tuple(hands.values()))
+            self.export_model(f"Location{location}", self.location_glb(location), placed=True, exclude_nodes=tuple(hands.values()))
             for node in hands.values():
-                self.export_model(self.hand_key(location, node), self.location_glb(location), only_node=node)
+                self.export_model(self.hand_key(location, node), self.location_glb(location), placed=True, only_node=node)
         for eagle in {e["model"] for e in EAGLE.values()}:
             self.export_model(eagle, self.models_dir / f"{eagle}.glb")
         for name in TOWER_MODELS + TOWER_EXTRAS + BULLET_MODELS:
@@ -346,11 +366,11 @@ class Exporter:
 
     def export_menus(self) -> None:
         for key, groups in MENU_SHEETS.items():
-            exporter = self.export_model(key, self.models_dir / f"{key}.glb", hud=True, posed=True, node_groups=groups,
+            exporter = self.export_model(key, self.models_dir / f"{key}.glb", placed=True, hud=True, posed=True, node_groups=groups,
                                          node_orders=SHEET_ORDERS.get(key), canvas=key in CANVAS_SHEETS)
             names = [n["name"] for n in exporter.doc["nodes"] if "mesh" in n and "name" in n]
             self.menus[key] = {"pick": exporter.pick_triangles(names)}
-        camera = self.export_model(MENU_CAMERA, self.models_dir / f"{MENU_CAMERA}.glb", keep_helpers=True)
+        camera = self.export_model(MENU_CAMERA, self.models_dir / f"{MENU_CAMERA}.glb", placed=True, keep_helpers=True)
         scene = (load_sidecar(self.models_dir / f"{MENU_CAMERA}.glb") or {}).get("scene", {})
         fov_h = float(scene.get("B3DEXT_CAMERA", {}).get("pos", [60.0])[0])
         frames = [camera_pose(mat_mul(m, CAMERA_FIX)) for m in camera.node_world_frames(MENU_CAMERA_NODE)]
@@ -358,7 +378,7 @@ class Exporter:
         # The world's translucent nodes are ordered as seen from the main menu's camera.
         for key in MENU_WORLD:
             glb = self.models_dir / f"{key}.glb"
-            self.export_model(key, glb, posed=True, rank_from=tuple(frames[0][0]))
+            self.export_model(key, glb, placed=True, posed=True, rank_from=tuple(frames[0][0]))
             self.menus[key] = {"light": self.scene_light(glb)}
 
     def copy_textures(self) -> None:
@@ -461,6 +481,59 @@ class Exporter:
             rank += 1
         return out
 
+    def resource_file(self, path: str) -> Path | None:
+        """A project resource: an exported one (`/generated/`, `/assets/`) from this export
+        only, a hand-written one (the screens under main/) from the project; None for a
+        builtin or a resource this export skipped."""
+        exported = path.startswith(EXPORTED_DIRS)
+        candidate = (self.out if exported else PROJECT_DIR) / path.lstrip("/")
+        return candidate if candidate.exists() else None
+
+    def resource_links(self, path: str) -> tuple[frozenset[str] | None, list[str]]:
+        """A resource's material tags (None unless it is a material) and the resources it
+        references, read once per export (the screens share the entities' graph)."""
+        if path not in self.links:
+            source = self.resource_file(path)
+            if source is None or path.endswith(BINARY_RESOURCES):
+                self.links[path] = (None, [])
+            elif path.endswith(".material"):
+                self.links[path] = (frozenset(MATERIAL_TAG.findall(source.read_text())), [])
+            else:
+                self.links[path] = (None, RESOURCE_REFERENCE.findall(source.read_text()))
+        return self.links[path]
+
+    def screen_material_tags(self, collection: str) -> set[frozenset[str]]:
+        """The tag sets of every material a screen's collection can draw: its game objects,
+        their components and sub-collections, and what its factories spawn."""
+        tags: set[frozenset[str]] = set()
+        seen: set[str] = set()
+        stack = [collection]
+        while stack:
+            path = stack.pop()
+            if path in seen:
+                continue
+            seen.add(path)
+            material, references = self.resource_links(path)
+            if material is not None:
+                tags.add(material)
+            stack += references
+        return tags
+
+    def screen_passes(self, world: list[dict], hud: list[dict]) -> dict[str, dict[str, list[int]]]:
+        """Per screen (its collection's name): the 1-based indices of the world and HUD passes
+        whose predicate some material of the screen matches (all of the pass's tags)."""
+        controller = self.resource_file(CONTROLLER_GO)
+        out = {}
+        for collection in PROXY_COLLECTION.findall(controller.read_text()) if controller else []:
+            source = self.resource_file(collection)
+            if source is None:
+                continue  # a location this export skipped
+            name = COLLECTION_NAME.search(source.read_text())[1]
+            tags = self.screen_material_tags(collection)
+            out[name] = {key: [i + 1 for i, p in enumerate(items) if any(set(p["tags"]) <= t for t in tags)]
+                         for key, items in (("world", world), ("hud", hud))}
+        return out
+
     def write_render_passes(self) -> None:
         classes = ("opaque", "blend", "add", "mul")
 
@@ -517,7 +590,15 @@ class Exporter:
 
         lines = ["-- Generated by defold/tools/export_defold.py -- do not edit.",
                  "-- Draw passes of render/blitz.render_script: the union over every exported scene.", "local M = {}", ""]
-        lines += pass_lines("world", passes) + pass_lines("hud", hud_passes) + ["", "return M", ""]
+        lines += pass_lines("world", passes) + pass_lines("hud", hud_passes)
+        # A pass no material of the current screen matches still costs a draw command and a
+        # render-list lookup every frame: the render script draws only the screen's passes.
+        lines += ["", "-- Per screen (its collection's name): the indices of the passes its materials match.",
+                  "M.screens = {"]
+        for name, lists in sorted(self.screen_passes(passes, hud_passes).items()):
+            lines.append('    ["%s"] = {world = {%s}, hud = {%s}},' % (
+                name, ", ".join(map(str, lists["world"])), ", ".join(map(str, lists["hud"]))))
+        lines += ["}", "", "return M", ""]
         (self.out / "generated" / "render_passes.lua").write_text("\n".join(lines))
 
     def write_common(self) -> None:
@@ -636,7 +717,9 @@ class Exporter:
         for key, meta in self.models.items():
             groups = ", ".join(f"{g} = true" for g in meta["groups"])
             lines.append(f'M["{key}"] = {{')
-            lines.append(f'    go = "{meta["go"]}", factory = "factory_{key.replace("/", "_")}", frames = {fmt(meta["frames"])}, skinned = {str(meta["skinned"]).lower()},')
+            # A placed model has no factory (write_entities_go).
+            factory = "" if key in self.placed else f'factory = "factory_{key.replace("/", "_")}", '
+            lines.append(f'    go = "{meta["go"]}", {factory}frames = {fmt(meta["frames"])}, skinned = {str(meta["skinned"]).lower()},')
             lines.append(f'    morph_targets = {meta["morph_targets"]}, groups = {{{groups}}},')
             if meta.get("bones"):
                 b = meta["bones"]
@@ -662,8 +745,12 @@ class Exporter:
         (self.out / "generated" / "models.lua").write_text("\n".join(lines))
 
     def write_entities_go(self) -> None:
+        """A factory per spawnable model. A factory keeps its prototype's resources loaded, so
+        a placed model (a location scene, the menu's world) would load into every location."""
         lines = []
         for key, meta in self.models.items():
+            if key in self.placed:
+                continue
             lines += ["embedded_components {", f'  id: "factory_{key.replace("/", "_")}"', '  type: "factory"',
                       f'  data: "prototype: \\"{meta["go"]}\\"\\n"', "}"]
         (self.out / "generated" / "entities.go").write_text("\n".join(lines) + "\n")
@@ -686,7 +773,6 @@ class Exporter:
         self.copy_data()
         export_hud_atlas(self.textures_dir / "gui.png", self.out, {"loading": self.textures_dir / "Menu" / "Loading.png"})
         export_icons(self.godot / "icons", self.out)
-        self.write_render_passes()
         self.write_common()
         for location in self.locations:
             self.write_location_data(location)
@@ -696,6 +782,8 @@ class Exporter:
         self.write_models_lua()
         self.write_entities_go()
         self.write_sounds_go(self.copy_audio())
+        # Last: the per-screen pass lists read the collections and materials written above.
+        self.write_render_passes()
         skinned = sum(1 for m in self.models.values() if m["skinned"])
         print(f"{len(self.models)} models ({skinned} skinned), {len(self.textures)} textures -> {self.out}")
 

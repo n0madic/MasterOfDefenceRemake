@@ -133,6 +133,13 @@ class DefoldExportTests(unittest.TestCase):
         military = self.exporter.models["Towers/Military"]
         self.assertIsNone(military["bones"])
         self.assertTrue(military["skinned"])
+        # A bone-posed model has no skeleton (the engine would pose and upload a rig it never
+        # uses every frame); a Defold-skinned one keeps it and its animation.
+        models = self.out / "generated" / "models"
+        self.assertNotIn("skeleton:", (models / "Towers_Nature.model").read_text())
+        military_model = (models / "Towers_Military.model").read_text()
+        self.assertIn('skeleton: "/assets/models/Towers_Military.glb"', military_model)
+        self.assertIn('default_animation: "b3d"', military_model)
 
     def test_bone_poses_reproduce_the_full_matrix_world_transform(self) -> None:
         from modexport.models import ModelExporter, load_sidecar, _basis_shear_degrees
@@ -453,6 +460,38 @@ class DefoldExportTests(unittest.TestCase):
         self.assertIn('group: \\"music\\"', music[:300])
         click = sounds[sounds.index('id: "click"'):]
         self.assertIn('group: \\"sfx\\"', click[:300])
+
+    def test_screens_draw_only_the_passes_their_materials_match(self) -> None:
+        text = (self.out / "generated" / "render_passes.lua").read_text()
+        world = re.findall(r"\{tags = \{([^}]*)\}", text[text.index("M.world"):text.index("M.hud")])
+        screens = {m[1]: [int(i) for i in m[2].split(", ") if i]
+                   for m in re.finditer(r'\["(\w+)"\] = \{world = \{([^}]*)\}, hud = \{[^}]*\}\}', text)}
+        # The exported locations and the hand-written screens; the skipped locations have no
+        # collection in this export.
+        self.assertTrue({"location1", "location6", "menu", "map", "ending"} <= screens.keys())
+        self.assertNotIn("location2", screens)
+        opaque = world.index('"order_0", "opaque"') + 1
+        self.assertIn(opaque, screens["location1"])
+        self.assertEqual(screens["map"], [])  # the map is all overlay
+        # Location 1's own EntityOrders are not location 6's.
+        self.assertNotEqual(screens["location1"], screens["location6"])
+        self.assertLess(len(screens["location1"]), len(world))
+        # Any component type brings its material in, not only models (a particle effect here).
+        fx_dir = self.out / "generated" / "fx_test"
+        fx_dir.mkdir()
+        (fx_dir / "spark.material").write_text('name: "spark"\ntags: "order_0"\ntags: "add"\n')
+        (fx_dir / "spark.particlefx").write_text('emitters {\n  material: "/generated/fx_test/spark.material"\n}\n')
+        (fx_dir / "spark.go").write_text('components {\n  id: "fx"\n  component: "/generated/fx_test/spark.particlefx"\n}\n')
+        self.assertIn(frozenset({"order_0", "add"}), self.exporter.screen_material_tags("/generated/fx_test/spark.go"))
+
+    def test_placed_models_have_no_factory(self) -> None:
+        # A factory keeps its prototype loaded: a location scene or the menu's world in
+        # entities.go would load into every location.
+        entities = (self.out / "generated" / "entities.go").read_text()
+        for placed in ("Location1", "Location6", "Menu_env", "Menu_congr", "Location1_big_arrow"):
+            self.assertNotIn(f'id: "factory_{placed}"', entities)
+        for spawned in ("Towers_Military", "Env", "Additional_eagle", "Monsters_Health"):
+            self.assertIn(f'id: "factory_{spawned}"', entities)
 
     def test_compressed_textures_are_block_aligned(self) -> None:
         # WebGL rejects BC textures whose sides are not multiples of 4 (Sve/Thorn skins are 1x1).

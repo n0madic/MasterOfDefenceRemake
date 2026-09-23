@@ -137,18 +137,27 @@ local function load_bones(meta, key)
 		end
 		mats[f] = jm
 	end
-	bone_cache[key] = {count = count, frames = frames, mats = mats}
+	-- The joints whose matrix changes over the frames; the others are uploaded once.
+	local all, animated = {}, {}
+	for j = 1, count do
+		all[j] = j
+		local first = mats[0][j]
+		for f = 1, frames - 1 do
+			local m = mats[f][j]
+			if m.c0 ~= first.c0 or m.c1 ~= first.c1 or m.c2 ~= first.c2 or m.c3 ~= first.c3 then
+				animated[#animated + 1] = j
+				break
+			end
+		end
+	end
+	bone_cache[key] = {count = count, frames = frames, mats = mats, all = all, animated = animated}
 	return bone_cache[key]
 end
 
 local ZERO = vmath.matrix4()
 ZERO.c0, ZERO.c1, ZERO.c2, ZERO.c3 = vmath.vector4(), vmath.vector4(), vmath.vector4(), vmath.vector4()
--- The `go.set` options addressing `bone_matrices[j]`, built once per joint index.
-local JOINT_INDEX = setmetatable({}, {__index = function(t, j)
-	local options = {index = j}
-	rawset(t, j, options)
-	return options
-end})
+-- The object's upload table (`go.set` value) for a pose of all joints / the animated ones.
+local POSE_BUFFERS = {all = "pose_all", animated = "pose_animated"}
 
 -- The model-space matrix of joint `j` (1-based) of a bone-posed model at frame `t`, the two
 -- nearest baked frames lerped.
@@ -176,30 +185,34 @@ end
 -- Upload the joint poses at frame `t` to every group's `bone_matrices`; the array index is
 -- the joint index the vertices carry (0-based in the shader). Joints in `hidden` (a set of
 -- 1-based indices) collapse to a zero matrix: Blitz `HideEntity` of that node; `offsets`
--- (joint -> vector3) move a joint in the model's space.
+-- (joint -> vector3) move a joint in the model's space. One `go.set` per group takes the
+-- whole pose (a table sets the array elements by its 1-based keys); after a plain pose the
+-- static joints already hold their matrix, so the next plain pose sends the animated ones.
 function M.pose(obj, t, hidden, offsets)
+	local plain = not hidden and not offsets
 	-- A plain pose at the frame already uploaded changes nothing (a tower idling at a
 	-- frame, a view synced twice between ticks).
-	if hidden or offsets then
-		obj.posed_t = nil
-	elseif obj.posed_t == t then
+	if plain and obj.posed_t == t then
 		return
-	else
-		obj.posed_t = t
 	end
 	local c = obj.bones or load_bones(obj.meta, obj.key)
 	obj.bones = c
-	for j = 1, c.count do
+	local field = (plain and obj.posed_t) and "animated" or "all"
+	local joints = c[field]
+	local buffer = obj[POSE_BUFFERS[field]] or {}
+	obj[POSE_BUFFERS[field]] = buffer
+	for _, j in ipairs(joints) do
 		local mat = (hidden and hidden[j]) and ZERO or M.joint_matrix(obj, t, j)
 		local offset = offsets and offsets[j]
 		if offset and mat ~= ZERO then
 			mat = vmath.matrix4_translation(offset) * mat
 		end
-		-- `index` is 1-based here; the shader reads the 0-based bone_matrices[joint].
-		for _, url in ipairs(obj.urls) do
-			go.set(url, "bone_matrices", mat, JOINT_INDEX[j])
-		end
+		buffer[j] = mat
 	end
+	for _, url in ipairs(obj.urls) do
+		go.set(url, "bone_matrices", buffer)
+	end
+	obj.posed_t = plain and t or nil
 end
 
 -- Blitz `SetAnimTime`: frame `t` of the model's animation, whichever way the exporter posed

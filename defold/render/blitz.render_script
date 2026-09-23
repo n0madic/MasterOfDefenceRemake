@@ -2,8 +2,9 @@
 -- entities with a positive EntityOrder first, highest order first, with the z-buffer off;
 -- then the opaque brushes with depth write; then the alpha / additive / multiplied ones
 -- with the depth test only, sorted back to front by Defold (per mesh origin, like Blitz).
--- The pass list comes from generated/render_passes.lua (the union over every scene); a
--- material's tags name its pass. The current screen sends its background colour and scene
+-- The pass list comes from generated/render_passes.lua (the union over every scene; each
+-- screen draws the passes its materials match, named in its `set_scene`); a material's
+-- tags name its pass. The current screen sends its background colour and scene
 -- light (`set_scene`); the light reaches every lit material through a constant buffer, so
 -- the shared tower and monster materials take each location's light. A gamma setting other
 -- than 0 draws the frame into a render target and copies it through render/gamma.material.
@@ -82,6 +83,15 @@ local function make_passes(list)
 	return out
 end
 
+-- The passes of `all` at the 1-based `indices`.
+local function pick_passes(all, indices)
+	local out = {}
+	for _, i in ipairs(indices) do
+		out[#out + 1] = all[i]
+	end
+	return out
+end
+
 local function set_clear_color(self, color)
 	self.clear_buffers = {
 		[graphics.BUFFER_TYPE_COLOR0_BIT] = color,
@@ -94,13 +104,20 @@ function init(self)
 	self.passes = make_passes(passes.world)
 	-- The HUD panel hangs on the camera and is drawn over a cleared depth buffer.
 	self.hud_passes = make_passes(passes.hud)
+	-- Per screen (hash of its collection's name) the passes its materials match: an unused
+	-- pass still costs a draw command every frame. A screen not listed draws them all.
+	self.screen_passes = {}
+	for name, used in pairs(passes.screens) do
+		self.screen_passes[hash(name)] = {world = pick_passes(self.passes, used.world), hud = pick_passes(self.hud_passes, used.hud)}
+	end
+	self.world_passes, self.overlay_passes = self.passes, self.hud_passes
 	-- The scene light of the lit materials (`light_dir`, `light_color`, `ambient`, point
 	-- lights), its direction and positions in the view space of the screen's camera: the
 	-- world and the overlay (whose fixed camera is that view space: a sheet hangs on the
 	-- camera in the original) share it.
 	self.constants = render.constant_buffer()
 	self.light_dir = vmath.vector4(0, -1, 0, 0)  -- world space
-	self.points = {}  -- {key, position (world, w = range)} of the scene's point lights
+	self.points = {}  -- {key, position (world, w = 1), range} of the scene's point lights
 	self.draw_options = {constants = self.constants}
 	self.camera_options = {use_frustum = false}
 	self.depth_clear = {[graphics.BUFFER_TYPE_DEPTH_BIT] = 1}
@@ -126,6 +143,9 @@ function on_message(self, message_id, message)
 		self.gamma = message.gamma or 0
 		self.gamma_constants.gamma_offset = vmath.vector4(self.gamma / GAMMA_LEVELS, self.gamma / GAMMA_LEVELS, self.gamma / GAMMA_LEVELS, 0)
 	elseif message_id == messages.SET_SCENE then
+		local used = message.screen and self.screen_passes[message.screen]
+		self.world_passes = used and used.world or self.passes
+		self.overlay_passes = used and used.hud or self.hud_passes
 		screen.max_aspect = message.max_aspect or screen.ASPECT
 		set_clear_color(self, message.clear_color)
 		self.light_dir = message.light_dir
@@ -136,7 +156,8 @@ function on_message(self, message_id, message)
 		for i, key in ipairs(POINT_LIGHT_KEYS) do
 			local light = message[key]
 			if light then
-				self.points[#self.points + 1] = {key = key, position = light}
+				-- The homogeneous world position, built once; the range rides in w.
+				self.points[#self.points + 1] = {key = key, position = vmath.vector4(light.x, light.y, light.z, 1), range = light.w}
 			end
 			self.constants[key] = NO_POINT_LIGHT
 			self.constants[POINT_COLOR_KEYS[i]] = message[POINT_COLOR_KEYS[i]] or NO_POINT_LIGHT
@@ -197,15 +218,15 @@ local function draw_scene(self, cam, canvas, box)
 	local view = camera.get_view(cam)
 	self.constants.light_dir = view * self.light_dir
 	for _, point in ipairs(self.points) do
-		local p = point.position
-		local v = view * vmath.vector4(p.x, p.y, p.z, 1)
-		self.constants[point.key] = vmath.vector4(v.x, v.y, v.z, p.w)
+		local v = view * point.position
+		v.w = point.range
+		self.constants[point.key] = v
 	end
 
 	render.enable_state(graphics.STATE_CULL_FACE)
 	render.set_cull_face(graphics.FACE_TYPE_BACK)
 	render.set_depth_func(graphics.COMPARE_FUNC_LEQUAL)
-	draw_passes(self.passes, self.draw_options)
+	draw_passes(self.world_passes, self.draw_options)
 	render.set_depth_mask(true)
 	render.clear(self.depth_clear)
 	-- The HUD panel is a fixed overlay at (0,0,-10): clear the world camera (so set_view /
@@ -222,7 +243,7 @@ local function draw_scene(self, cam, canvas, box)
 		overlay.canvas_aspect = aspect
 		overlay.canvas_projection = vmath.matrix4_perspective(screen.FOV, aspect, 0.5, 600)
 	end
-	draw_passes(self.hud_passes, self.draw_options, overlay)
+	draw_passes(self.overlay_passes, self.draw_options, overlay)
 	render.set_color_mask(true, true, true, true)
 	render.set_depth_mask(false)
 	render.disable_state(graphics.STATE_DEPTH_TEST)

@@ -35,7 +35,7 @@ M.SET_LOOP_GAIN = hash("audio_loop_gain")  -- {name, gain}: a loop heard from af
 M.SET_VOLUMES = hash("audio_volumes")  -- {music, sound} in 0..1
 
 -- Render script.
-M.SET_SCENE = hash("set_scene")      -- {clear_color, light_dir, light_color, ambient, point_light<i>, point_color<i>}
+M.SET_SCENE = hash("set_scene")      -- {screen, clear_color, light_dir, light_color, ambient, point_light<i>, point_color<i>}
 M.SET_DISPLAY = hash("set_display")  -- {wide, gamma}
 
 -- Engine messages.
