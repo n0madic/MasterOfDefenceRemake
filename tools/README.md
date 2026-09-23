@@ -17,19 +17,41 @@ The scripts used to produce `docs/` and `reference/`. Requirements: Python 3.10+
 | `hud_layout.py Data/env.b3d [--json OUT]` | projects the HUD panel's quads into 800×600 coordinates → `docs/data/hud_layout.json` |
 | `simulate_path.py enemy_paths.json [--raids-json raids.json] [--speed S…] [--json OUT]` | simulates an enemy moving along a path (ticks/seconds) → `docs/data/path_times.json` |
 
-## Remake pipeline (Godot)
+## Remake pipeline (Godot and Defold)
 
-| Script | Purpose |
+One entry point builds both ports from the unpacked original, with no step done twice:
+
+```bash
+python3 tools/build_assets.py --target {godot,defold,all} [--data-dir Data] [--import-dir build/import] \
+                              [--force] [--no-skin] [--embed]
+make assets PORT=godot|defold|all        # the same through make (make pipeline / make defold wrap it)
+```
+
+1. **Import stage** (`source_import.py`, port-neutral): `Data/` → `build/import/`
+   (`assets/models`, `assets/textures`, `assets/manifest.json`, `data/*.json`, `icons/`). It is
+   skipped while its inputs (every file of `Data/`, `tools/*.py`, `docs/data` tables, the icon
+   master, the options) are unchanged; `--force` rebuilds it.
+2. **Targets**, each from that tree and the original's sounds:
+   `targets/godot.py` → `godot/{assets,data,icons}` + `.import` options;
+   `targets/defold/` → `defold/{assets,generated,data}`.
+
+| Module | Purpose |
 |---|---|
-| `b3dlib.py` | module: parses B3D into a tree (`B3DFile{textures, brushes, root}`), `clean_name` for the `B3D_ORDR_n_`/`B3D_BB_1_` prefixes; `b3d_dump.py` is a printer built on top of it |
-| `blitzconv.py` | convention C1: mirroring coordinates/quaternions, triangle index order (`WINDING_SWAP`), MD2 axes |
-| `gltfwriter.py` | a minimal `.glb` writer (and `read_glb` for tests) |
-| `b3d2gltf.py IN.b3d OUT.glb --data-dir Data --textures-dir godot/assets/textures [--embed] [--no-skin]` | B3D → glb + sidecar `OUT.b3d.json` (order, tags, blend, lightmaps); BONE bones → a glTF skin; texture UV transforms are baked (the second layer → `TEXCOORD_1`); brush/vertex colors are converted from gamma to linear, vertex alpha is only kept for brushes with `EntityFX 2` (the ones Blitz draws with alpha blending, `Brush.uses_vertex_alpha`), the alpha of additive brushes is raised to the power 1.5 (to compensate for linear blending); for mirrored nodes (negative scale determinant: `Line04` on Location6, the `selection.b3d` circles) triangle winding is flipped, because Godot itself flips culling for such instances while D3D doesn't; alpha/mask PNGs are generated per Blitz's rules |
+| `build_assets.py` | the CLI: import stage, then the chosen targets |
+| `source_import.py` | the import stage: all b3d/md2 files, textures, tables, icons; `manifest.json` with the input fingerprint |
+| `b3dlib.py` | parses B3D into a tree (`B3DFile{textures, brushes, root}`), `clean_name` for the `B3D_ORDR_n_`/`B3D_BB_1_` prefixes; `b3d_dump.py` is a printer built on top of it, `export_paths.py` reads the enemy paths with it |
+| `blitzconv.py` | convention C1: mirroring coordinates/quaternions, triangle index order (`WINDING_SWAP`), MD2 axes, colours |
+| `mat4.py` | row-major 4x4 matrix / quaternion helpers shared by the converters and the targets |
+| `gltfwriter.py` | a minimal `.glb` writer (and `read_glb` / `read_accessor`) |
+| `b3d2gltf.py IN.b3d OUT.glb --data-dir Data --textures-dir build/import/assets/textures [--embed] [--no-skin]` | B3D → glb + sidecar `OUT.b3d.json` (order, tags, blend, lightmaps); BONE bones → a glTF skin; texture UV transforms are baked (the second layer → `TEXCOORD_1`); brush/vertex colors are converted from gamma to linear (glTF colours are linear), vertex alpha is only kept for brushes with `EntityFX 2` (the ones Blitz draws with alpha blending, `Brush.uses_vertex_alpha`), the alpha of additive brushes is raised to the power 1.5 (to compensate for linear blending); for mirrored nodes (negative scale determinant: `Line04` on Location6, the `selection.b3d` circles) triangle winding is flipped, because Godot (like glTF) flips culling for such instances while D3D doesn't — the Defold target undoes both where it bakes world space; alpha/mask PNGs are generated per Blitz's rules |
 | `md2togltf.py IN.md2 [SKIN] OUT.glb --data-dir Data --textures-dir …` | MD2 → glb with morph targets (frame k at t = k) + `OUT.md2.json` (bbox) |
-| `copy_assets.py Data godot/assets` | images → `assets/textures/<path>`, sounds → `assets/audio/` (non-PCM wav is re-encoded with ffmpeg/afconvert; ogg is remuxed with ffmpeg to drop the malformed "Sonic Foundry…" comment header that Godot complains about) |
-| `convert_all.py Data godot [--no-skin] [--embed]` | orchestrator: all b3d/md2 files + assets, writes `godot/assets/manifest.json` |
-| `export_godot_data.py Data godot/data` | `units/towers/raids/paths/locations/texts.json` for the game (in Godot coordinates) + copies of `hud_layout.json`, `path_times.json` |
-| `tests/` | `python3 -m unittest discover -s tools/tests -v` — checks for the parser, conversion, and export (needs `Pillow`, the unpacked data, and a completed `convert_all` run) |
+| `textures.py` | images → `assets/textures/<path>`; byte-identical images are shipped once (`canonical_images`) |
+| `game_data.py` | `units/towers/raids/paths/locations/texts.json` (in Godot coordinates, `res://` resource names) + copies of `hud_layout.json`, `path_times.json` |
+| `icons.py` | every platform's launcher icons from `art/icon_1024.png` (rendered by `godot/tools/render_icon.gd`, `make icon`) |
+| `audio.py` | the original's sounds (`audio_sources`), RIFF probing (`wav_info`), ffmpeg/oggenc encoders; Godot gets ogg remuxed without the malformed "Sonic Foundry…" comment header and non-PCM wav as PCM, Defold resampled PCM and libvorbis for longer sounds |
+| `targets/godot.py` | mirrors the import tree into godot/ (hard links), sounds, icons, pins the `.import` options |
+| `targets/defold/` | the Defold exporter (`export.py`, `models.py`, `materials.py`, `hud.py`, `icons.py`) |
+| `tests/` | `python3 -m unittest discover -s tools/tests -v` — checks for the parser, conversion, and export (needs `Pillow`, the unpacked data, and a completed `build_assets.py` run) |
 
 ## Full decompilation pipeline
 

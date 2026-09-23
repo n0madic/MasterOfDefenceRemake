@@ -21,7 +21,6 @@ from pathlib import Path
 
 from PIL import Image
 
-from b3d2gltf import mat_column_major, mat_inverse_affine, mat_mul, trs_matrix
 from gltfwriter import (
     COMPONENT_UBYTE,
     COMPONENT_UINT,
@@ -31,6 +30,20 @@ from gltfwriter import (
     GltfBuilder,
     read_accessor,
     read_glb,
+)
+from mat4 import (
+    IDENTITY,
+    Mat4,
+    determinant3,
+    mat_column_major,
+    mat_inverse_affine,
+    mat_mul,
+    node_matrix,
+    normal_matrix,
+    transform_normal,
+    transform_point,
+    trs_matrix,
+    unit_normal,
 )
 
 from .materials import MaterialVariant, gltf_color_to_blitz
@@ -45,47 +58,18 @@ GROUP_NODES = {"dno", "updates", "window"}
 # Location nodes textured with a Blitz `LoadAnimTexture` atlas whose frame `_fupdatelocation`
 # steps every tick: node -> (atlas image, frame size in pixels, frames shown, frames per tick).
 FRAME_ATLAS_NODES = {"river": ("Water.jpg", 64, 63, 1.0), "border": ("border.jpg", 128, 8, 0.5)}
-IDENTITY = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
-Mat4 = list[list[float]]
 
 
-def node_matrix(node: dict) -> Mat4:
-    t = tuple(node.get("translation", [0.0, 0.0, 0.0]))
-    r = node.get("rotation", [0.0, 0.0, 0.0, 1.0])
-    s = tuple(node.get("scale", [1.0, 1.0, 1.0]))
-    return trs_matrix(t, (r[3], r[0], r[1], r[2]), s)
-
-
-def transform_point(m: Mat4, p) -> tuple[float, float, float]:
-    return tuple(m[i][0] * p[0] + m[i][1] * p[1] + m[i][2] * p[2] + m[i][3] for i in range(3))
-
-
-def normal_matrix(m: Mat4) -> Mat4:
-    """Inverse transpose of the upper 3x3 (as a 4x4 with no translation)."""
-    inv = mat_inverse_affine([row[:3] + [0.0] for row in m[:3]] + [[0.0, 0.0, 0.0, 1.0]])
-    return [[inv[j][i] for j in range(3)] + [0.0] for i in range(3)] + [[0.0, 0.0, 0.0, 1.0]]
-
-
-def transform_normal(nm: Mat4, n) -> tuple[float, float, float]:
-    """`n` through the normal matrix `nm` (normalized later, `unit_normal`)."""
-    return (nm[0][0] * n[0] + nm[0][1] * n[1] + nm[0][2] * n[2],
-            nm[1][0] * n[0] + nm[1][1] * n[1] + nm[1][2] * n[2],
-            nm[2][0] * n[0] + nm[2][1] * n[1] + nm[2][2] * n[2])
-
-
-def unit_normal(n) -> tuple[float, float, float]:
-    """`n` normalized; a degenerate normal becomes +Y."""
-    length = math.sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2])
-    if length < 1e-8:
-        return (0.0, 1.0, 0.0)
-    return (n[0] / length, n[1] / length, n[2] / length)
-
-
-def determinant3(m: Mat4) -> float:
-    a = m
-    return (a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
-            - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
-            + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]))
+def _bracket(times: list[float], t: float) -> tuple[int, int, float]:
+    """Keys `lo`, `hi` around time `t` (inside the key range) and the blend factor."""
+    lo, hi = 0, len(times) - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if times[mid] <= t:
+            lo = mid
+        else:
+            hi = mid
+    return lo, hi, (t - times[lo]) / (times[hi] - times[lo]) if times[hi] > times[lo] else 0.0
 
 
 def sample_track(times: list[float], values: list, t: float):
@@ -94,14 +78,7 @@ def sample_track(times: list[float], values: list, t: float):
         return values[0]
     if t >= times[-1]:
         return values[-1]
-    lo, hi = 0, len(times) - 1
-    while hi - lo > 1:
-        mid = (lo + hi) // 2
-        if times[mid] <= t:
-            lo = mid
-        else:
-            hi = mid
-    f = (t - times[lo]) / (times[hi] - times[lo]) if times[hi] > times[lo] else 0.0
+    lo, hi, f = _bracket(times, t)
     a, b = values[lo], values[hi]
     return tuple(a[i] + (b[i] - a[i]) * f for i in range(len(a)))
 
@@ -118,11 +95,7 @@ def _sample_quat(track: tuple[list[float], list], frame: float) -> tuple[float, 
         return tuple(values[0])
     if frame >= times[-1]:
         return tuple(values[-1])
-    lo, hi = 0, len(times) - 1
-    while hi - lo > 1:
-        mid = (lo + hi) // 2
-        lo, hi = (mid, hi) if times[mid] <= frame else (lo, mid)
-    f = (frame - times[lo]) / (times[hi] - times[lo]) if times[hi] > times[lo] else 0.0
+    lo, hi, f = _bracket(times, frame)
     a, b = values[lo], list(values[hi])
     if sum(a[i] * b[i] for i in range(4)) < 0.0:
         b = [-x for x in b]

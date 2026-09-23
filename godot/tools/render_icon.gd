@@ -2,12 +2,13 @@
 ## render of the same model) on a transparent background (needs a window, not --headless):
 ##   godot --path godot -s res://tools/render_icon.gd [-- OUT.png [level] [elev] [yaw]]
 ## The tower is drawn into an offscreen viewport, cropped to a square around its pixels (the
-## ground patch is hidden) and written to res://icons/icon_1024.png, the source of every
-## launcher icon (see make_icons.gd).
+## ground patch is hidden) and written to art/icon_1024.png (next to the Godot project), the
+## source of every launcher icon of both ports (tools/icons.py, run by tools/build_assets.py).
 extends SceneTree
 
 const MODEL := "res://assets/models/Towers/Military.glb"
-const DEFAULT_OUT := "res://icons/icon_1024.png"
+## Relative to the project directory: the repository's art/ folder is outside res://.
+const DEFAULT_OUT := "../art/icon_1024.png"
 const OUT_SIZE := 1024
 const RENDER_SIZE := 2048  # offscreen viewport, downscaled for the final icon
 const DEFAULT_LEVEL := 10
@@ -23,7 +24,7 @@ const PADDING := 0.04  # fraction of the crop side left around the tower
 const SETTLE_FRAMES := 4  # frames for the animation and the transforms to apply
 const CAPTURE_FRAME := 8
 
-var out := DEFAULT_OUT
+var out := ""
 var elevation := DEFAULT_ELEVATION
 var yaw := DEFAULT_YAW
 var viewport: SubViewport
@@ -34,8 +35,7 @@ var frames := 0
 
 func _initialize() -> void:
 	var args := OS.get_cmdline_user_args()
-	if args.size() > 0:
-		out = args[0]
+	out = args[0] if args.size() > 0 else ProjectSettings.globalize_path("res://").path_join(DEFAULT_OUT).simplify_path()
 	var level := int(args[1]) if args.size() > 1 else DEFAULT_LEVEL
 	if args.size() > 2:
 		elevation = float(args[2])

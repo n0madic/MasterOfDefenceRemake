@@ -1,50 +1,54 @@
-"""Checks of the Defold export (defold/tools/export_defold.py) against the generated
-godot/assets of Location1 (run tools/convert_all.py first)."""
+"""Checks of the Defold export (tools/targets/defold/) from the import stage's tree
+(run tools/build_assets.py first)."""
 from __future__ import annotations
 
-import importlib.util
 import re
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from testpaths import GODOT_DIR, ROOT
+from testpaths import DATA_DIR, IMPORT_DIR, ROOT
 
+from audio import wav_info
 from blitzconv import srgb_to_linear
 from gltfwriter import read_accessor, read_glb
-
-TOOLS = ROOT / "defold" / "tools"
-
-
-def load_exporter():
-    sys.path.insert(0, str(TOOLS))
-    spec = importlib.util.spec_from_file_location("export_defold", TOOLS / "export_defold.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from targets.defold import export
 
 
 class DefoldExportTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        if not (GODOT_DIR / "assets" / "models" / "Location1" / "Location1.glb").exists():
-            raise unittest.SkipTest("run tools/convert_all.py first")
-        cls.module = load_exporter()
+        if not (IMPORT_DIR / "assets" / "models" / "Location1" / "Location1.glb").exists():
+            raise unittest.SkipTest("run tools/build_assets.py first")
+        cls.module = export
         cls.tmp = tempfile.TemporaryDirectory()
         cls.out = Path(cls.tmp.name)
-        cls.exporter = cls.module.Exporter([1, 6], GODOT_DIR, cls.out)
+        # Left over by an older export: files the export no longer writes.
+        for rel in cls.STALE:
+            (cls.out / rel).parent.mkdir(parents=True, exist_ok=True)
+            (cls.out / rel).write_text("old\n")
+        cls.exporter = cls.module.Exporter(IMPORT_DIR, DATA_DIR, cls.out)
         cls.exporter.run()
 
     @classmethod
     def tearDownClass(cls) -> None:
         cls.tmp.cleanup()
 
+    STALE = ("generated/materials/X.material", "generated/materials/Location1_99.vp", "generated/models/X_solid.model",
+             "generated/go/X.go", "generated/bones/X.bin", "generated/locations/l7.lua", "assets/models/X.glb",
+             "assets/textures/Location1/old.jpg", "assets/audio/old.wav", "assets/hud/old.png", "data/old.json")
+
+    def test_files_of_older_exports_are_removed(self) -> None:
+        for rel in self.STALE:
+            self.assertFalse((self.out / rel).exists(), rel)
+        for meta in self.exporter.models.values():
+            self.assertTrue((self.out / meta["go"].lstrip("/")).exists(), meta["go"])
+
     def glb(self, name: str):
         return read_glb(self.out / "assets" / "models" / f"{name}.glb")
 
     def test_colour_round_trip(self) -> None:
-        from modexport.materials import gltf_color_to_blitz, linear_to_srgb
+        from targets.defold.materials import gltf_color_to_blitz, linear_to_srgb
         for c in (0.0, 0.05, 0.3185468059531732, 0.6, 1.0):
             self.assertAlmostEqual(linear_to_srgb(srgb_to_linear(c)), c, places=5)
         self.assertAlmostEqual(gltf_color_to_blitz([0.0, 0.0, 0.0, 0.5 ** 1.5], additive=True)[3], 0.5, places=6)
@@ -142,10 +146,9 @@ class DefoldExportTests(unittest.TestCase):
         self.assertIn('default_animation: "b3d"', military_model)
 
     def test_bone_poses_reproduce_the_full_matrix_world_transform(self) -> None:
-        from modexport.models import ModelExporter, load_sidecar, _basis_shear_degrees
-        from b3d2gltf import mat_mul
+        from targets.defold.models import ModelExporter, load_sidecar, _basis_shear_degrees
         import struct
-        glb = GODOT_DIR / "assets" / "models" / "Towers" / "Nature.glb"
+        glb = IMPORT_DIR / "assets" / "models" / "Towers" / "Nature.glb"
         exp = ModelExporter("Towers/Nature", glb, load_sidecar(glb), self.out, self.out)
         self.assertTrue(exp.sheared)
         joints = exp._joint_order()
@@ -190,8 +193,8 @@ class DefoldExportTests(unittest.TestCase):
         inverse-bind matrix is near-singular and which Defold's skinning renders as garbage
         (the ghost showed up flipped). Such a model must take the bone-matrix path with
         joint-local vertices, exactly as Godot transforms its nodes."""
-        from modexport.models import ModelExporter, load_sidecar
-        glb = GODOT_DIR / "assets" / "models" / "Towers" / "death.glb"
+        from targets.defold.models import ModelExporter, load_sidecar
+        glb = IMPORT_DIR / "assets" / "models" / "Towers" / "death.glb"
         exp = ModelExporter("Towers/death", glb, load_sidecar(glb), self.out, self.out)
         self.assertFalse(exp.sheared)               # not sheared ...
         self.assertTrue(exp._degenerate_scale)      # ... but a degenerate joint scale ...
@@ -301,7 +304,7 @@ class DefoldExportTests(unittest.TestCase):
     def test_lit_materials_take_the_light_from_the_render_script(self) -> None:
         # The light is not baked: every lit material carries the same neutral defaults and
         # the render script passes the scene's light in a constant buffer.
-        from modexport.materials import NEUTRAL_LIGHT
+        from targets.defold.materials import NEUTRAL_LIGHT
         material = (self.out / "generated" / "materials" / "Monsters_Crawl_0.material").read_text()
         self.assertIn('name: "light_dir"', material)
         ambient = material[material.index('name: "ambient"'):]
@@ -466,10 +469,8 @@ class DefoldExportTests(unittest.TestCase):
         world = re.findall(r"\{tags = \{([^}]*)\}", text[text.index("M.world"):text.index("M.hud")])
         screens = {m[1]: [int(i) for i in m[2].split(", ") if i]
                    for m in re.finditer(r'\["(\w+)"\] = \{world = \{([^}]*)\}, hud = \{[^}]*\}\}', text)}
-        # The exported locations and the hand-written screens; the skipped locations have no
-        # collection in this export.
-        self.assertTrue({"location1", "location6", "menu", "map", "ending"} <= screens.keys())
-        self.assertNotIn("location2", screens)
+        # Every location and the hand-written screens.
+        self.assertTrue({*(f"location{n}" for n in range(1, 7)), "menu", "map", "ending"} <= screens.keys())
         opaque = world.index('"order_0", "opaque"') + 1
         self.assertIn(opaque, screens["location1"])
         self.assertEqual(screens["map"], [])  # the map is all overlay
@@ -511,8 +512,8 @@ class DefoldExportTests(unittest.TestCase):
         if not (shutil.which("ffmpeg") and shutil.which("oggenc")):
             self.skipTest("needs ffmpeg and oggenc")
         audio = self.out / "assets" / "audio"
-        self.assertGreater(self.module.wav_seconds(GODOT_DIR / "assets" / "audio" / "congr.wav"), 9.0)
-        self.assertLess(self.module.wav_seconds(GODOT_DIR / "assets" / "audio" / "rebutton.wav"), 0.1)
+        self.assertGreater(wav_info(DATA_DIR / "Sounds" / "congr.wav").seconds, 9.0)
+        self.assertLess(wav_info(DATA_DIR / "Sounds" / "rebutton.wav").seconds, 0.1)
         sounds = (self.out / "generated" / "sounds.go").read_text()
         for name in ("congr.ogg", "tlen.ogg", "click.ogg", "rebutton.wav", "menu.ogg"):
             self.assertIn(f"/assets/audio/{name}", sounds)

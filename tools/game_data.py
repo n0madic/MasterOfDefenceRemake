@@ -1,9 +1,8 @@
-#!/usr/bin/env python3
-"""Export everything the Godot remake needs into godot/data/*.json.
+"""The game tables of both ports: `export_data(Data, out_dir)` writes data/*.json
+(called by the import stage, tools/source_import.py).
 
-    python3 tools/export_godot_data.py MasterOfDefense_unpacked/Data godot/data
-
-Outputs (all values in Godot coordinates, see tools/blitzconv.py):
+Outputs (all values in glTF / Godot coordinates, see tools/blitzconv.py; resources are named
+by their Godot path, which the Defold port maps back to its own):
 - units.json, towers.json           - as export_csv.py, with res:// model paths
 - raids.json                        - campaign raids 1..180 + survival table (RaidsData7)
 - paths.json                        - enemy path keyframes per location (C1-converted)
@@ -14,7 +13,6 @@ Outputs (all values in Godot coordinates, see tools/blitzconv.py):
 """
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import shutil
@@ -23,9 +21,9 @@ from pathlib import Path
 import b3dlib
 from blitzconv import blitz_quat_to_godot, blitz_to_godot
 from export_csv import LAST_CAMPAIGN_RAID, LOCATION_FIRST_RAID, load_raids, load_towers, load_units
-from export_paths import read_keys
+from export_paths import path_file, path_keys
 
-LOG = logging.getLogger("export_godot_data")
+LOG = logging.getLogger("game_data")
 
 MODELS_ROOT = "res://assets/models"
 TOWER_MODELS = {1: "Military", 2: "Magic", 3: "Nature", 4: "Freeze", 5: "Fire"}
@@ -35,6 +33,9 @@ TOWER_PLACE_MODELS = {1: "MilitaryPlace", 2: "MagicPlace", 3: "NaturePlace", 4: 
 TOWER_EFFECT_MODELS = {1: "MilitaryEff", 2: "MagicEff", 3: "NatureEff", 4: "FreezeEff", 5: "MagicEff"}
 TEXTURES_ROOT = "res://assets/textures"
 AUDIO_ROOT = "res://assets/audio"
+# Golden values recovered by the docs tools (hud_layout.py, simulate_path.py), shipped as is.
+DOCS_DATA = Path(__file__).resolve().parent.parent / "docs" / "data"
+DOCS_FILES = ("hud_layout.json", "path_times.json")
 
 # _fsetlocationdata + per-location special cases scattered over _floadlocation.
 LOCATION_EXTRA = {
@@ -101,16 +102,10 @@ def export_texts(data_dir: Path) -> dict:
 def export_paths(data_dir: Path) -> dict:
     result = {}
     for loc in range(1, 7):
-        folder = next(d for d in data_dir.iterdir() if d.name.lower() == f"location{loc}")
-        path_file = next(f for f in folder.iterdir() if f.name.lower() == "path1.b3d")
-        frames, nodes = read_keys(path_file.read_bytes())
-        merged: dict[int, dict] = {}
-        for k in nodes["path"]:
-            merged.setdefault(k["frame"], {}).update(k)
+        frames, path = path_keys(path_file(data_dir, loc))
         keys = []
-        for f in sorted(merged):
-            rec = merged[f]
-            out = {"frame": f, "pos": list(blitz_to_godot(tuple(rec["pos"])))}
+        for rec in path:
+            out = {"frame": rec["frame"], "pos": list(blitz_to_godot(tuple(rec["pos"])))}
             if "rot_wxyz" in rec:
                 out["rot_wxyz"] = list(blitz_quat_to_godot(tuple(rec["rot_wxyz"])))
             keys.append(out)
@@ -169,18 +164,11 @@ def on_disk_name(folder: Path, name: str) -> str:
     return name
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("data_dir", type=Path)
-    ap.add_argument("out_dir", type=Path)
-    ap.add_argument("--docs-data", type=Path, default=Path(__file__).resolve().parent.parent / "docs" / "data")
-    args = ap.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    out = args.out_dir
+def export_data(data_dir: Path, out: Path, docs_data: Path = DOCS_DATA) -> list[str]:
+    """Write every table into `out`; returns the file names."""
     out.mkdir(parents=True, exist_ok=True)
-
-    units = load_units(args.data_dir)
-    monsters_dir = args.data_dir / "Monsters"
+    units = load_units(data_dir)
+    monsters_dir = data_dir / "Monsters"
     for u in units:
         # The table spells some files differently from the disk (Male.md2 vs male.md2);
         # Blitz did not care, an exported pck is case-sensitive.
@@ -188,34 +176,30 @@ def main() -> None:
         u["model"] = f"{MODELS_ROOT}/Monsters/{stem}.glb"
         if u["texture"]:
             u["texture"] = f"{TEXTURES_ROOT}/Monsters/{on_disk_name(monsters_dir, Path(u['texture']).name)}"
-    towers = load_towers(args.data_dir)
+    towers = load_towers(data_dir)
     for t in towers.values():
         type_id = t["type_id"]
         t["model"] = f"{MODELS_ROOT}/Towers/{TOWER_MODELS[type_id]}.glb"
         t["place_model"] = f"{MODELS_ROOT}/Towers/{TOWER_PLACE_MODELS[type_id]}.glb"
         t["effect_model"] = f"{MODELS_ROOT}/Towers/{TOWER_EFFECT_MODELS[type_id]}.glb"
-        t["anim_frames"] = b3dlib.load(args.data_dir / "Towers" / f"{TOWER_MODELS[type_id]}.b3d").anim_frames
-        t["fire1"] = fire_point_keys(args.data_dir, TOWER_MODELS[type_id])
+        t["anim_frames"] = b3dlib.load(data_dir / "Towers" / f"{TOWER_MODELS[type_id]}.b3d").anim_frames
+        t["fire1"] = fire_point_keys(data_dir, TOWER_MODELS[type_id])
         for lv in t["levels"]:
             if lv["bullet_model"]:
                 lv["bullet_model"] = f"{MODELS_ROOT}/Towers/{lv['bullet_model']}.glb"
-    raids = load_raids(args.data_dir)
+    raids = load_raids(data_dir)
     files = {
         "units.json": units,
         "towers.json": towers,
         "raids.json": {"location_first_raid": raids["location_first_raid"], "campaign": raids["campaign"],
                        "survival": raids["survival"]},
-        "paths.json": export_paths(args.data_dir),
+        "paths.json": export_paths(data_dir),
         "locations.json": export_locations(raids),
-        "texts.json": export_texts(args.data_dir),
+        "texts.json": export_texts(data_dir),
     }
     for name, payload in files.items():
         (out / name).write_text(json.dumps(payload, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-        LOG.info("wrote %s", out / name)
-    for name in ("hud_layout.json", "path_times.json"):
-        shutil.copy(args.docs_data / name, out / name)
-        LOG.info("wrote %s", out / name)
-
-
-if __name__ == "__main__":
-    main()
+    for name in DOCS_FILES:
+        shutil.copy(docs_data / name, out / name)
+    LOG.info("wrote %d tables to %s", len(files) + len(DOCS_FILES), out)
+    return [*files, *DOCS_FILES]

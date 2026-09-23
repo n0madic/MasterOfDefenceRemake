@@ -4,6 +4,7 @@ EntityAlpha / PositionTexture as per-component constants, skinning and MD2 morph
 """
 from __future__ import annotations
 
+from b3d2gltf import KNOWN_MISSING
 from blitzconv import ADDITIVE_ALPHA_EXPONENT
 
 # Blitz3D brush blend modes (`BrushBlend`), EntityFX flags, texture flags, TextureBlend.
@@ -81,9 +82,11 @@ def canvas_tag(order: int) -> str:
 
 
 # The tower bases' ground layer (Military's `dno` brush): the location's `dno<N>.png`,
-# multiplied, relative to the tower models' folder.
-GROUND_BASE_LAYER = {"texture": "dno.png", "flags": 523, "blend": 2, "uv2": False, "sphere": False,
-                     "uri": "../../textures/Towers/dno1.png", "clamp_u": False, "clamp_v": False}
+# multiplied, relative to the tower models' folder (the converter's stand-in for the
+# `dno.png` the original never ships).
+GROUND_BASE_TEXTURE = "dno.png"
+GROUND_BASE_LAYER = {"texture": GROUND_BASE_TEXTURE, "flags": 523, "blend": 2, "uv2": False, "sphere": False,
+                     "uri": f"../../textures/{KNOWN_MISSING[GROUND_BASE_TEXTURE]}", "clamp_u": False, "clamp_v": False}
 
 class MaterialVariant:
     """One generated Defold material: a Blitz brush of one model, drawn at a given

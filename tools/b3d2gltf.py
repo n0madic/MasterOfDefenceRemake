@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Convert a Blitz3D .b3d file into a glTF binary (.glb) plus a JSON sidecar.
 
-    python3 tools/b3d2gltf.py IN.b3d OUT.glb --data-dir Data/ --textures-dir godot/assets/textures
+    python3 tools/b3d2gltf.py IN.b3d OUT.glb --data-dir Data/ --textures-dir build/import/assets/textures
 
 Conventions (see docs/12 and the remake plan):
 - coordinates are mirrored with tools/blitzconv.py (C1), triangle winding reordered;
@@ -39,8 +39,9 @@ from PIL import Image
 import b3dlib
 from b3dlib import TEX_FLAG_CLAMP_U, TEX_FLAG_CLAMP_V, B3DFile, Brush, Mesh, Node, Texture
 from blitzconv import blitz_color_to_gltf, blitz_quat_to_godot, blitz_to_godot, triangle_indices
-from copy_assets import canonical_images
 from gltfwriter import COMPONENT_UBYTE, COMPONENT_UINT, TARGET_ARRAY_BUFFER, TARGET_ELEMENT_ARRAY_BUFFER, GltfBuilder
+from mat4 import Mat4, mat_column_major, mat_inverse_affine, mat_mul, trs_matrix
+from textures import canonical_images
 
 LOG = logging.getLogger("b3d2gltf")
 
@@ -176,55 +177,6 @@ def face_normals(mesh: Mesh, positions: list[tuple[float, float, float]]) -> lis
         length = math.sqrt(n[0] ** 2 + n[1] ** 2 + n[2] ** 2)
         out.append((n[0] / length, n[1] / length, n[2] / length) if length > 0 else (0.0, 1.0, 0.0))
     return out
-
-
-Mat4 = list[list[float]]  # row-major 4x4
-
-
-def quat_to_mat3(q: tuple[float, float, float, float]) -> list[list[float]]:
-    """Textbook rotation matrix (rows) of a unit quaternion (w, x, y, z)."""
-    w, x, y, z = q
-    return [
-        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
-    ]
-
-
-def trs_matrix(t: tuple[float, float, float], q: tuple[float, float, float, float], s: tuple[float, float, float]) -> Mat4:
-    r = quat_to_mat3(q)
-    return [
-        [r[0][0] * s[0], r[0][1] * s[1], r[0][2] * s[2], t[0]],
-        [r[1][0] * s[0], r[1][1] * s[1], r[1][2] * s[2], t[1]],
-        [r[2][0] * s[0], r[2][1] * s[1], r[2][2] * s[2], t[2]],
-        [0.0, 0.0, 0.0, 1.0],
-    ]
-
-
-def mat_mul(a: Mat4, b: Mat4) -> Mat4:
-    return [[sum(a[i][k] * b[k][j] for k in range(4)) for j in range(4)] for i in range(4)]
-
-
-def mat_inverse_affine(m: Mat4) -> Mat4:
-    """Inverse of an affine matrix (rotation * scale + translation) by 3x3 cofactors."""
-    a = [row[:3] for row in m[:3]]
-    det = (a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
-           - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
-           + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]))
-    inv = [[0.0] * 3 for _ in range(3)]
-    for i in range(3):
-        for j in range(3):
-            minor = [[a[r][c] for c in range(3) if c != i] for r in range(3) if r != j]
-            cof = minor[0][0] * minor[1][1] - minor[0][1] * minor[1][0]
-            inv[i][j] = ((-1) ** (i + j)) * cof / det
-    t = [m[0][3], m[1][3], m[2][3]]
-    out = [inv[i] + [-sum(inv[i][k] * t[k] for k in range(3))] for i in range(3)]
-    out.append([0.0, 0.0, 0.0, 1.0])
-    return out
-
-
-def mat_column_major(m: Mat4) -> list[float]:
-    return [m[r][c] for c in range(4) for r in range(4)]
 
 
 def node_local_matrix(node: Node) -> Mat4:
@@ -601,7 +553,7 @@ def main() -> None:
     ap.add_argument("src", type=Path)
     ap.add_argument("dst", type=Path)
     ap.add_argument("--data-dir", type=Path, required=True, help="unpacked Data/ directory (texture search root)")
-    ap.add_argument("--textures-dir", type=Path, required=True, help="where textures are copied (godot/assets/textures)")
+    ap.add_argument("--textures-dir", type=Path, required=True, help="where textures are copied (build/import/assets/textures)")
     ap.add_argument("--embed", action="store_true", help="embed images in the glb instead of referencing files")
     ap.add_argument("--no-skin", dest="skin", action="store_false", help="keep bones as rigid nodes (no glTF skin)")
     args = ap.parse_args()

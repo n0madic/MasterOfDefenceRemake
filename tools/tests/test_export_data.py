@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import unittest
 
-from testpaths import GODOT_DIR
+from testpaths import GODOT_DIR, IMPORT_DIR
 
-from export_godot_data import add_vd_tags, on_disk_name
+from game_data import add_vd_tags, on_disk_name
 
 
 class ExportDataTests(unittest.TestCase):
@@ -37,17 +37,17 @@ class ExportDataTests(unittest.TestCase):
     def test_unit_model_paths_match_the_files_case(self) -> None:
         """An exported pck is case-sensitive: `Male.md2` in the table is `male.glb` on disk."""
         units = json.loads((GODOT_DIR / "data" / "units.json").read_text())
-        models = GODOT_DIR / "assets" / "models" / "Monsters"
+        models = IMPORT_DIR / "assets" / "models" / "Monsters"
         if not models.is_dir():
-            self.skipTest("godot/assets not converted")
+            self.skipTest("run tools/build_assets.py first")
         on_disk = {f.name for f in models.iterdir()}
         for u in units:
             self.assertIn(u["model"].rsplit("/", 1)[1], on_disk, u["model"])
 
     def test_on_disk_name_matches_case_insensitively(self) -> None:
-        models = GODOT_DIR / "assets" / "models" / "Monsters"
+        models = IMPORT_DIR / "assets" / "models" / "Monsters"
         if not models.is_dir():
-            self.skipTest("godot/assets not converted")
+            self.skipTest("run tools/build_assets.py first")
         self.assertEqual(on_disk_name(models, "Male.glb"), "male.glb")
         self.assertEqual(on_disk_name(models, "Nothing.glb"), "Nothing.glb")
 

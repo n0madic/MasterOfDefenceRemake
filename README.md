@@ -45,8 +45,8 @@ intentional deviations from the original.
 ## Quick start
 
 ```bash
-# 1. Build the Godot data/assets from your copy of the original game
-make pipeline          # = data + assets + import (needs MasterOfDefense_unpacked/Data)
+# 1. Build the Godot resources from your copy of the original game
+make pipeline          # = assets PORT=godot + import (needs MasterOfDefense_unpacked/Data)
 
 # 2. Run the game
 make run                       # main menu
@@ -56,8 +56,7 @@ make run ARGS="--location=1"   # jump straight into a location (see godot/README
 Equivalent without `make`:
 
 ```bash
-python3 tools/export_godot_data.py MasterOfDefense_unpacked/Data godot/data
-python3 tools/convert_all.py MasterOfDefense_unpacked/Data godot
+python3 tools/build_assets.py --target godot   # or defold / all (the default)
 godot --headless --path godot --import
 godot --path godot
 ```

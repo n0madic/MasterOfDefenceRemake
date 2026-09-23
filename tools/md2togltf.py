@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Convert a Quake II MD2 model into a .glb with morph targets.
 
-    python3 tools/md2togltf.py IN.md2 SKIN.jpg OUT.glb --textures-dir godot/assets/textures --data-dir Data/
+    python3 tools/md2togltf.py IN.md2 SKIN.jpg OUT.glb --textures-dir build/import/assets/textures --data-dir Data/
 
 Reproduces blitz3d/md2rep.cpp:
 - vertices are unique (vertex index, texcoord index) pairs; UV = (s / skinWidth, t / skinHeight);
@@ -29,8 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from blitzconv import md2_to_godot
-from copy_assets import canonical_images
 from gltfwriter import COMPONENT_UINT, TARGET_ARRAY_BUFFER, TARGET_ELEMENT_ARRAY_BUFFER, GltfBuilder
+from textures import canonical_images
 
 LOG = logging.getLogger("md2togltf")
 

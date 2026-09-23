@@ -51,15 +51,16 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | sort | awk -F ':.*## ' '{printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 	@echo
 	@echo "Variables: GODOT=$(GODOT)"
-	@echo "           DATA_DIR=$(DATA_DIR) BUILD_DIR=$(BUILD_DIR) WEB_PORT=$(WEB_PORT)"
+	@echo "           DATA_DIR=$(DATA_DIR) BUILD_DIR=$(BUILD_DIR) PORT=$(PORT) WEB_PORT=$(WEB_PORT)"
 
-# --- Data pipeline (original assets -> Godot) ----------------------------------------------
-.PHONY: data assets import reimport pipeline defold defold-run defold-web defold-android
-data: ## Export tables, paths and texts from the unpacked original to godot/data
-	$(PYTHON) tools/export_godot_data.py $(DATA_DIR) $(PROJECT)/data
+# --- Data pipeline (original assets -> build/import -> Godot / Defold) ---------------------
+# One script: the import stage (models, textures, tables, icons -> build/import, skipped when
+# up to date), then the port(s): PORT=godot|defold|all.
+PORT ?= all
 
-assets: ## Convert B3D/MD2 models, textures and sounds to godot/assets
-	$(PYTHON) tools/convert_all.py $(DATA_DIR) $(PROJECT)
+.PHONY: assets import reimport pipeline defold defold-run defold-web defold-android
+assets: ## Build the resources of PORT=godot|defold|all (default all) from the unpacked original
+	$(PYTHON) tools/build_assets.py --target $(PORT) --data-dir $(DATA_DIR)
 
 import: ## Import resources headlessly (fills .godot/imported)
 	$(GODOT_HEADLESS) --import
@@ -68,10 +69,12 @@ reimport: ## Drop the import cache and import everything again (after changing a
 	rm -rf $(PROJECT)/.godot/imported
 	$(MAKE) import
 
-pipeline: data assets import ## Full pipeline: data + assets + import
+pipeline: ## Godot: build its resources and import them
+	$(MAKE) assets PORT=godot
+	$(MAKE) import
 
-defold: ## Export all locations + entities for the Defold port (defold/, needs godot/assets and data)
-	$(PYTHON) defold/tools/export_defold.py
+defold: ## Build the Defold port's resources (defold/assets, generated, data)
+	$(MAKE) assets PORT=defold
 
 defold-run: defold ## Build the Defold port with bob and run it (ARGS="--config=main.demo=1", VARIANT=debug for the log)
 	defold/tools/bob.sh run $(ARGS)
@@ -83,17 +86,11 @@ defold-android: defold ## Bundle the Defold port as an .apk (debug keystore) int
 	defold/tools/bob.sh android
 
 # --- Icons ---------------------------------------------------------------------------------
-ICON_PNG := $(PROJECT)/icons/icon_1024.png
-ICON_PNGS := $(addprefix $(PROJECT)/icons/,icon_256.png android_main_192.png android_fg_432.png android_bg_432.png android_mono_432.png ios_app_store_1024.png)
-
-.PHONY: icon icons
-icon: check-assets ## Re-render icons/icon_1024.png from the Military tower model (needs a window)
+# art/icon_1024.png is the master of every launcher icon; `make assets` derives the platform
+# icons of both ports from it (tools/icons.py).
+.PHONY: icon
+icon: check-assets ## Re-render art/icon_1024.png from the Military tower model (needs a window)
 	$(GODOT) --path $(PROJECT) -s res://tools/render_icon.gd
-
-icons: $(ICON_PNGS) ## Derive the Android / App Store launcher PNGs (godot/icons) from icons/icon_1024.png
-
-$(ICON_PNGS): $(ICON_PNG) $(PROJECT)/tools/make_icons.gd
-	$(GODOT_HEADLESS) -s res://tools/make_icons.gd
 
 # --- Tests and running ---------------------------------------------------------------------
 .PHONY: test test-godot test-tools test-sim run
@@ -115,7 +112,7 @@ run: ## Run the game on the desktop (ARGS="--location=1 --debug")
 # --- Export preconditions ------------------------------------------------------------------
 .PHONY: check-assets check-templates
 check-assets:
-	@test -f $(PROJECT)/assets/manifest.json || { echo "godot/assets is missing: run 'make assets' (needs $(DATA_DIR))"; exit 1; }
+	@test -f $(PROJECT)/assets/manifest.json -a -f $(PROJECT)/icons/icon_256.png || { echo "godot/assets is missing: run 'make assets PORT=godot' (needs $(DATA_DIR))"; exit 1; }
 
 check-templates: ## Verify the export templates for this Godot version are installed
 	@ver=$$($(GODOT) --version | sed -E 's/^([0-9]+\.[0-9]+(\.[0-9]+)?)\.([a-z]+).*/\1.\3/'); \
@@ -129,7 +126,7 @@ check-templates: ## Verify the export templates for this Godot version are insta
 WEB_ZIP := $(BUILD_DIR)/MasterOfDefense-web.zip
 
 .PHONY: web web-debug web-zip serve-web
-web: check-assets check-templates icons import ## Export the release web build to build/web
+web: check-assets check-templates import ## Export the release web build to build/web
 	mkdir -p $(WEB_DIR)
 	$(GODOT_HEADLESS) --export-release "Web" ../$(WEB_OUT)
 	@test -f $(WEB_OUT) && test -f $(WEB_DIR)/index.wasm || { echo "web export failed"; exit 1; }
@@ -140,7 +137,7 @@ web-zip: web ## Export the release web build and pack it into build/MasterOfDefe
 	cd $(WEB_DIR) && zip -r -X -9 $(CURDIR)/$(WEB_ZIP) . -x '.DS_Store' -x '*/.DS_Store'
 	@ls -lh $(WEB_ZIP)
 
-web-debug: check-assets check-templates icons import ## Export the debug web build to build/web
+web-debug: check-assets check-templates import ## Export the debug web build to build/web
 	mkdir -p $(WEB_DIR)
 	$(GODOT_HEADLESS) --export-debug "Web" ../$(WEB_OUT)
 	@test -f $(WEB_OUT) && test -f $(WEB_DIR)/index.wasm || { echo "web export failed"; exit 1; }
@@ -156,13 +153,13 @@ android-template: ## Build the trimmed release template from the Godot sources (
 	@test -n "$(GODOT_SRC)" || { echo "set GODOT_SRC to a checkout of godotengine/godot at 4.7.2-stable"; exit 1; }
 	tools/build_android_template.sh $(GODOT_SRC) $(dir $(ANDROID_TEMPLATE))
 
-android: check-assets check-templates icons import ## Export the debug APK (arm64, debug keystore)
+android: check-assets check-templates import ## Export the debug APK (arm64, debug keystore)
 	mkdir -p $(ANDROID_DIR)
 	$(GODOT_HEADLESS) --export-debug "Android" ../$(APK_DEBUG)
 	@test -f $(APK_DEBUG) || { echo "android export failed"; exit 1; }
 	@ls -lh $(APK_DEBUG)
 
-android-release: check-assets check-templates icons import ## Export the release APK (custom template if built, else stock; GODOT_ANDROID_KEYSTORE_RELEASE_*, else the debug key)
+android-release: check-assets check-templates import ## Export the release APK (custom template if built, else stock; GODOT_ANDROID_KEYSTORE_RELEASE_*, else the debug key)
 	@mkdir -p $(ANDROID_DIR)
 	@echo "preset: $(ANDROID_RELEASE_PRESET)$(if $(wildcard $(ANDROID_TEMPLATE)), ($(ANDROID_TEMPLATE)), (stock template; 'make android-template' builds the trimmed one))"
 	@if [ -n "$$GODOT_ANDROID_KEYSTORE_RELEASE_PATH" ]; then \
@@ -184,7 +181,7 @@ android-release: check-assets check-templates icons import ## Export the release
 		echo "         set GODOT_ANDROID_KEYSTORE_RELEASE_PATH, _USER and _PASSWORD for a release key";; \
 	esac
 
-android-emulator: check-assets check-templates icons import ## Export the debug APK for the emulator (forces gl_compatibility: it cannot present Vulkan)
+android-emulator: check-assets check-templates import ## Export the debug APK for the emulator (forces gl_compatibility: it cannot present Vulkan)
 	mkdir -p $(ANDROID_DIR)
 	$(GODOT_HEADLESS) --export-debug "Android Emulator" ../$(APK_EMULATOR)
 	@test -f $(APK_EMULATOR) || { echo "android export failed"; exit 1; }
@@ -206,7 +203,7 @@ android-info: ## Print package, version, orientation and native code of the debu
 
 # --- iOS -----------------------------------------------------------------------------------
 .PHONY: ios ios-open
-ios: check-assets check-templates icons import ## Export the Xcode project to build/ios (IOS_TEAM_ID=XXXXXXXXXX once; sign in Xcode)
+ios: check-assets check-templates import ## Export the Xcode project to build/ios (IOS_TEAM_ID=XXXXXXXXXX once; sign in Xcode)
 	@if [ -n "$(IOS_TEAM_ID)" ]; then \
 		sed -i '' 's|^application/app_store_team_id=.*|application/app_store_team_id="$(IOS_TEAM_ID)"|' $(PROJECT)/export_presets.cfg; \
 	fi

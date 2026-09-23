@@ -6,9 +6,8 @@ original (`../MasterOfDefense_unpacked/Data`) by the tools in `../tools`.
 ## Building the data
 
 ```bash
-python3 tools/export_godot_data.py MasterOfDefense_unpacked/Data godot/data   # tables, paths, texts
-python3 tools/convert_all.py MasterOfDefense_unpacked/Data godot               # B3D/MD2 → glb, textures, sounds
-godot --headless --path godot --import                                         # import resources
+python3 tools/build_assets.py --target godot   # B3D/MD2 → glb, textures, tables, icons, sounds (make assets PORT=godot)
+godot --headless --path godot --import         # import resources (make import)
 ```
 
 ## Builds (mobile and web)
@@ -24,8 +23,7 @@ make android-release  # release APK; key via GODOT_ANDROID_KEYSTORE_RELEASE_PATH
 make android-template GODOT_SRC=~/godot   # trimmed release template built from Godot 4.7.2 sources → build/templates (see below)
 make android-emulator # debug APK for the emulator (gl_compatibility)
 make ios IOS_TEAM_ID=XXXXXXXXXX   # build/ios/*.xcodeproj, signing and archiving happen in Xcode
-make icon           # renders icons/icon_1024.png from the Military tower model (needs a window)
-make icons          # icon_1024.png → the rest of icons/*.png for Android and the App Store (the favicon and the remaining iOS icons are derived from icons/icon_256.png automatically)
+make icon           # renders ../art/icon_1024.png from the Military tower model (needs a window); `make assets` derives icons/*.png from it (the favicon and the remaining iOS icons are derived from icons/icon_256.png automatically)
 ```
 
 Release APK: if the trimmed template `build/templates/android_release.apk` has been built
@@ -49,8 +47,8 @@ rock.) Runtime changes to such a material go through `BlitzAnimator` (`copy_mate
 noticeably brighter (Location1's roofs) — Mobile matches Forward+, so this is a discrepancy in
 Compatibility itself.
 
-The icon — `icons/icon_1024.png`: a render of a level-10 Military tower (`tools/render_icon.gd`), just like
-the original `Data/td.ico`.
+The icon — `../art/icon_1024.png`: a render of a level-10 Military tower (`tools/render_icon.gd`), just like
+the original `Data/td.ico`; the launcher icons of both ports are derived from it (`../tools/icons.py`).
 
 ## Tests
 
@@ -265,11 +263,11 @@ settings — `user://settings.json`, high scores — `user://highscores.json`.
   per frame — `birdpath1` went from 56K to 900K). JPEG textures are imported as lossy WebP
   (`compress/mode=1`, q=0.85; WebP stores alpha losslessly), PNG atlases and masks are
   imported lossless. Settings live in `.import` sidecars written by
-  `tools/godot_import.py` (called from `convert_all.py`): Godot reads the `[params]` of an
+  `tools/targets/godot.py`: Godot reads the `[params]` of an
   existing sidecar, and only falls back to `[importer_defaults]` for files that don't have one.
   VRAM compression (mode 2/4) doesn't work here: `UvAtlasAnimator` slices the atlas via
   `get_image().get_region()`, and the Web preset would pack every texture twice
   (S3TC + ETC2). Images from the original that are identical in content (skins under `Additional/`,
-  `castle2.jpg` across three locations, …) are copied only once (`copy_assets.canonical_images`,
+  `castle2.jpg` across three locations, …) are copied only once (`textures.canonical_images`,
   preferring the directories the code references — `RUNTIME_TEXTURE_DIRS`); the sidecars
   `*.b3d.json`/`*.md2.json`, `manifest.json`, and `addons/` are excluded from the export.

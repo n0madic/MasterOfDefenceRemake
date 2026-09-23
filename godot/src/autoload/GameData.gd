@@ -1,4 +1,4 @@
-## Static game tables exported by tools/export_godot_data.py (res://data/*.json).
+## Static game tables exported by tools/game_data.py (res://data/*.json, tools/build_assets.py).
 ##
 ## Registered as the `GameData` autoload, but also instantiable directly for headless
 ## tests: `var data := GameDataScript.new(); data.load_all()`.

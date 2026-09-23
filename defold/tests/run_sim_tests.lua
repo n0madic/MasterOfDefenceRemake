@@ -1,5 +1,5 @@
 -- Headless checks of the Lua simulation: `lua defold/tests/run_sim_tests.lua` from the
--- repository root (needs godot/data, i.e. `make data`). Each tests/test_*.lua returns a
+-- repository root (needs godot/data, committed; `make assets PORT=godot` rebuilds it). Each tests/test_*.lua returns a
 -- function taking the harness below.
 local root = arg[0]:match("^(.*)/defold/tests/") or "."
 package.path = root .. "/defold/?.lua;" .. root .. "/defold/tests/?.lua;" .. package.path

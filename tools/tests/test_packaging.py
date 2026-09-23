@@ -9,8 +9,8 @@ from pathlib import Path
 
 from testpaths import GODOT_DIR
 
-from copy_assets import canonical_images, copy_assets, remove_stale_copy
-from godot_import import JPG_PARAMS, SCENE_PARAMS, TEXTURE_PARAMS, apply_import_params, ensure_import_params
+from targets.godot import JPG_PARAMS, SCENE_PARAMS, TEXTURE_PARAMS, apply_import_params, ensure_import_params
+from textures import canonical_images, copy_textures
 
 RES_TEXTURE = re.compile(r"res://assets/textures/[A-Za-z0-9_/.%]+")
 
@@ -46,23 +46,12 @@ class CanonicalImagesTests(unittest.TestCase):
         self.assertEqual(rel["Additional/wood.png"], "wood.png")
         self.assertEqual(rel["Location3/floor.jpg"], "Location3/floor.jpg")
 
-    def test_copy_assets_ships_duplicates_once_and_drops_stale_copies(self) -> None:
-        assets = Path(self._tmp.name) / "assets"
-        stale = assets / "textures" / "Additional" / "Skeleton.jpg"
-        stale.parent.mkdir(parents=True)
-        stale.write_bytes(b"old")
-        stale.with_name("Skeleton.jpg.import").write_text("[remap]\n")
-        stale.with_name("Skeleton__alpha.png").write_bytes(b"old")
-        copied = copy_assets(self.data, assets)
-        self.assertEqual(sorted(copied["textures"]),
-                         ["Location3/floor.jpg", "Menu/castle2.jpg", "Monsters/Skeleton.jpg", "wood.png"])
-        self.assertFalse(stale.exists())
-        self.assertFalse(stale.with_name("Skeleton.jpg.import").exists())
-        self.assertFalse(stale.with_name("Skeleton__alpha.png").exists())
-        self.assertTrue((assets / "textures" / "Monsters" / "Skeleton.jpg").exists())
-
-    def test_remove_stale_copy_ignores_missing_files(self) -> None:
-        remove_stale_copy(Path(self._tmp.name) / "nothing" / "here.jpg")
+    def test_copy_textures_ships_duplicates_once(self) -> None:
+        textures = Path(self._tmp.name) / "textures"
+        copied = copy_textures(self.data, textures)
+        self.assertEqual(sorted(copied), ["Location3/floor.jpg", "Menu/castle2.jpg", "Monsters/Skeleton.jpg", "wood.png"])
+        self.assertEqual(sorted(p.relative_to(textures).as_posix() for p in textures.rglob("*") if p.is_file()), sorted(copied))
+        self.assertEqual(copy_textures(self.data, textures), [])  # unchanged files are not copied again
 
 
 class ImportParamsTests(unittest.TestCase):
@@ -149,13 +138,13 @@ detect_3d/compress_to=0
 
 
 class GeneratedAssetsTests(unittest.TestCase):
-    """Checks on the generated godot/assets (run tools/convert_all.py first)."""
+    """Checks on the generated godot/assets (run tools/build_assets.py first)."""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.textures = GODOT_DIR / "assets" / "textures"
         if not (GODOT_DIR / "assets" / "manifest.json").exists():
-            raise unittest.SkipTest("run tools/convert_all.py first")
+            raise unittest.SkipTest("run tools/build_assets.py first")
 
     def test_runtime_texture_paths_exist(self) -> None:
         """Paths hard-coded in src/ and data/ must survive the duplicate collapsing."""

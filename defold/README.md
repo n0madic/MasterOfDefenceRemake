@@ -9,13 +9,12 @@ tables. It runs on the desktop, in the browser and on Android / iOS.
 The rules follow the decompiled original (`reference/decomp`, [`docs/`](../docs/README.md));
 the Godot remake (`godot/`) served as the reference for how the original engine behaves.
 
-Everything in `assets/`, `data/` and `generated/` is produced from the Godot pipeline's
-output (`godot/assets`, `godot/data`, which themselves need the unpacked original game)
-and is gitignored:
+Everything in `assets/`, `data/` and `generated/` is produced from the unpacked original
+game by the shared pipeline (`tools/build_assets.py`: the port-neutral import stage in
+`build/import`, then this port's backend `tools/targets/defold/`) and is gitignored; the export empties these directories before it writes them:
 
 ```bash
-make pipeline          # once: B3D/MD2/textures/sounds -> godot/assets, tables -> godot/data
-make defold            # export every location, the menus and the entities into defold/
+make defold            # import stage (skipped when up to date) + every location, the menus and the entities into defold/
 make defold-run        # bob build + dmengine (ARGS="--config=main.location=3")
 make defold-web        # browser bundle -> build/defold-web (serve it over http)
 make defold-android    # .apk -> build/defold-android
@@ -100,8 +99,9 @@ first), `demo_skills=1`, `demo_menu=1`, `pivot_x`/`pivot_z` (camera), `auto_adva
 
 ## The exporter
 
-`tools/export_defold.py` + `tools/modexport/` read the Godot pipeline's glbs and
-`.b3d.json` sidecars, so the conventions verified for Godot are reused.
+`../tools/targets/defold/` reads the import stage's glbs and `.b3d.json` sidecars (the
+same ones the Godot port imports), so the conventions verified for Godot are reused; the
+sounds are encoded from the original (`../tools/audio.py`).
 
 - **Models**: Defold plays only skeletal and morph target animations, so B3D node
   animation becomes skinning — one joint per node. Hierarchies Defold's SRT bones cannot
@@ -120,7 +120,7 @@ first), `demo_skills=1`, `demo_menu=1`, `pivot_x`/`pivot_z` (camera), `auto_adva
   (pickable menu items, the menu camera's flight), `generated/models.lua`,
   `generated/render_passes.lua`, `generated/entities.go`, `generated/sounds.go` (groups
   `music` / `sfx` for the volume settings).
-- **Icons**: the Godot port's `godot/icons` become `generated/icons/` (Android / iOS PNGs,
+- **Icons**: the import stage's icon set (`../tools/icons.py`, from `../art/icon_1024.png`) gives `generated/icons/` (Android / iOS PNGs,
   macOS `.icns`, Windows `.ico`) and the bundle resources `generated/bundle/` (Android's
   adaptive icon, the web `favicon.ico`, linked into `index.html` by `tools/bob.sh web`).
 

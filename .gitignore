@@ -13,3 +13,4 @@ defold/build/
 defold/.internal/
 defold/.editor_settings
 defold/debug.keystore*
+godot/icons/*.png
