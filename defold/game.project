@@ -1,5 +1,5 @@
 [project]
-title = Master of Defense
+title = Master Of Defense
 version = 1.0
 dependencies#0 = 
 custom_resources = /data,/generated/bones
