@@ -3,6 +3,10 @@ path_settings {
   profile: "Gui"
 }
 path_settings {
+  path: "**/*.jpg"
+  profile: "Opaque"
+}
+path_settings {
   path: "**"
   profile: "Default"
 }
@@ -12,6 +16,21 @@ profiles {
     os: OS_ID_GENERIC
     formats {
       format: TEXTURE_FORMAT_RGBA
+      compressor: "BasisU"
+      compressor_preset: "BASISU_HIGH"
+    }
+    mipmaps: true
+    premultiply_alpha: false
+  }
+}
+profiles {
+  name: "Opaque"
+  platforms {
+    os: OS_ID_GENERIC
+    formats {
+      format: TEXTURE_FORMAT_RGB
+      compressor: "BasisU"
+      compressor_preset: "BASISU_HIGH"
     }
     mipmaps: true
     premultiply_alpha: false

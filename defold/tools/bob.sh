@@ -4,12 +4,14 @@
 #   defold/tools/bob.sh run [args...]    # build + run dmengine (e.g. --config=main.demo=1)
 #   defold/tools/bob.sh web              # bundle for the browser into build/defold-web
 #   defold/tools/bob.sh mac              # .app bundle into build/defold-mac
-#   defold/tools/bob.sh android          # debug .apk (bob's debug keystore) into build/defold-android
+#   defold/tools/bob.sh android          # .apk (bob's debug keystore) into build/defold-android
 #   defold/tools/bob.sh ios              # .app for iOS into build/defold-ios; needs IOS_IDENTITY and
 #                                        # IOS_PROVISIONING (a signing identity and .mobileprovision)
 # Environment: DEFOLD_APP (default /Applications/Defold.app), DEFOLD_TOOLS (cache dir for
-# bob.jar / dmengine, default build/defold-tools).
+# bob.jar / dmengine, default build/defold-tools), VARIANT (engine variant of the bundles:
+# debug by default, release drops the engine's logging/profiler and is smaller).
 set -e
+VARIANT=${VARIANT:-debug}
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 PROJECT="$ROOT/defold"
 DEFOLD_APP=${DEFOLD_APP:-/Applications/Defold.app}
@@ -32,8 +34,10 @@ fetch() {
 }
 [ -f "$BOB" ] || fetch "$BOB" "https://d.defold.com/archive/$SHA/bob/bob.jar"
 [ -f "$ENGINE" ] || { fetch "$ENGINE" "https://d.defold.com/archive/$SHA/engine/$PLATFORM/dmengine"; chmod +x "$ENGINE"; }
+# --texture-compression applies the compressors of render/level.texture_profiles (without it
+# bob stores every texture as raw RGBA).
 bob() {
-  "$JAVA" -Dcom.google.protobuf.use_unsafe_pre22_gencode=true -jar "$BOB" --root "$PROJECT" "$@"
+  "$JAVA" -Dcom.google.protobuf.use_unsafe_pre22_gencode=true -jar "$BOB" --root "$PROJECT" --texture-compression "$@"
 }
 cmd=${1:-build}
 shift || true
@@ -43,11 +47,16 @@ rm -rf "$PROJECT/build"
 case "$cmd" in
   build) bob --platform "$PLATFORM" --variant debug build ;;
   run) bob --platform "$PLATFORM" --variant debug build && cd "$PROJECT" && exec "$ENGINE" "$@" ;;
-  web) bob --platform wasm-web --variant debug --archive --bundle-output "$ROOT/build/defold-web" build bundle ;;
-  mac) bob --platform "$PLATFORM" --variant debug --archive --bundle-output "$ROOT/build/defold-mac" build bundle ;;
-  android) bob --platform arm64-android --architectures arm64-android --bundle-format apk --variant debug --archive \
+  web) bob --platform wasm-web --variant "$VARIANT" --archive --bundle-output "$ROOT/build/defold-web" build bundle
+    # The web template has no icon setting: link the favicon.ico the bundle resources put
+    # next to index.html (browsers only probe /favicon.ico at the site root).
+    for html in "$ROOT"/build/defold-web/*/index.html; do
+      perl -pi -e 's|</title>|</title>\n\t<link rel="icon" href="favicon.ico">|' "$html"
+    done ;;
+  mac) bob --platform "$PLATFORM" --variant "$VARIANT" --archive --bundle-output "$ROOT/build/defold-mac" build bundle ;;
+  android) bob --platform arm64-android --architectures arm64-android --bundle-format apk --variant "$VARIANT" --archive \
     --bundle-output "$ROOT/build/defold-android" build bundle ;;
-  ios) bob --platform arm64-ios --architectures arm64-ios --variant debug --archive --identity "$IOS_IDENTITY" \
+  ios) bob --platform arm64-ios --architectures arm64-ios --variant "$VARIANT" --archive --identity "$IOS_IDENTITY" \
     --mobileprovisioning "$IOS_PROVISIONING" --bundle-output "$ROOT/build/defold-ios" build bundle ;;
   *) echo "usage: $0 build|run|web|mac|android|ios" >&2; exit 2 ;;
 esac

@@ -18,7 +18,7 @@ make pipeline          # once: B3D/MD2/textures/sounds -> godot/assets, tables -
 make defold            # export every location, the menus and the entities into defold/
 make defold-run        # bob build + dmengine (ARGS="--config=main.location=3")
 make defold-web        # browser bundle -> build/defold-web (serve it over http)
-make defold-android    # debug .apk -> build/defold-android
+make defold-android    # .apk -> build/defold-android (VARIANT=release for a release engine)
 defold/tools/bob.sh ios   # needs IOS_IDENTITY and IOS_PROVISIONING
 make test-sim          # the Lua simulation's headless tests (plain `lua`)
 ```
@@ -26,6 +26,12 @@ make test-sim          # the Lua simulation's headless tests (plain `lua`)
 Or open `defold/` in the Defold editor after `make defold` (the bootstrap collection
 refers to generated files). `tools/bob.sh` downloads `bob.jar` / `dmengine` matching the
 installed editor's engine SHA into `build/defold-tools`.
+
+Size: `tools/bob.sh` builds with `--texture-compression`, so `render/level.texture_profiles`
+applies: textures ship as Basis UASTC (RGB for the jpg ones), transcoded at load to what the
+GPU supports; the HUD atlas stays raw RGBA for the crisp glyphs. `make defold` re-encodes the
+music and the wavs longer than 2 s with libvorbis (`oggenc`, e.g. `brew install
+vorbis-tools`, plus `ffmpeg`); short effects stay PCM.
 
 ## Controls
 
@@ -110,6 +116,9 @@ first), `demo_skills=1`, `demo_menu=1`, `pivot_x`/`pivot_z` (camera), `auto_adva
   (pickable menu items, the menu camera's flight), `generated/models.lua`,
   `generated/render_passes.lua`, `generated/entities.go`, `generated/sounds.go` (groups
   `music` / `sfx` for the volume settings).
+- **Icons**: the Godot port's `godot/icons` become `generated/icons/` (Android / iOS PNGs,
+  macOS `.icns`, Windows `.ico`) and the bundle resources `generated/bundle/` (Android's
+  adaptive icon, the web `favicon.ico`, linked into `index.html` by `tools/bob.sh web`).
 
 ## Deviations and known gaps
 

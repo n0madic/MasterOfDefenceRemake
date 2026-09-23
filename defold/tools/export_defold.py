@@ -32,12 +32,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+from PIL import Image
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from gltfwriter import read_accessor  # noqa: E402
 from modexport.hud import export_gradient, export_hud_atlas  # noqa: E402
+from modexport.icons import export_icons  # noqa: E402
 from b3d2gltf import mat_mul  # noqa: E402
 from modexport.materials import canvas_tag, order_tag  # noqa: E402
 from modexport.models import ModelExporter, load_sidecar, node_matrix, transform_point, unit_normal  # noqa: E402
@@ -136,7 +139,13 @@ def fmt(v: float) -> str:
     return f"{v:.6f}"
 
 
+TEXTURE_BLOCK = 4  # BC/ASTC-4x4/UASTC block side the compressed texture profiles need
+JPEG_QUALITY = 95  # a re-saved (stretched) jpg texture
 WAV_RATE = 44100
+# libvorbis quality (oggenc -q): the music lands near the original's 96 kbps mono streams.
+VORBIS_QUALITY = 3
+# Longer wavs (jingles, ambient loops) ship as Vorbis; short effects stay PCM.
+LONG_SOUND_SECONDS = 2.0
 
 
 def needs_resample(wav: Path) -> bool:
@@ -148,6 +157,49 @@ def needs_resample(wav: Path) -> bool:
     rate = int.from_bytes(head[24:28], "little")
     bits = int.from_bytes(head[34:36], "little")
     return rate < 22050 or bits < 16
+
+
+def wav_seconds(wav: Path) -> float:
+    """Duration of a RIFF wav from its `fmt ` byte rate and `data` size (0 if not a wav)."""
+    data = wav.read_bytes()
+    if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return 0.0
+    byte_rate = size = 0
+    pos = 12
+    while pos + 8 <= len(data):
+        chunk, length = data[pos:pos + 4], int.from_bytes(data[pos + 4:pos + 8], "little")
+        if chunk == b"fmt ":
+            byte_rate = int.from_bytes(data[pos + 16:pos + 20], "little")
+        elif chunk == b"data":
+            size = length
+        pos += 8 + length + (length & 1)
+    return size / byte_rate if byte_rate else 0.0
+
+
+def copy_texture(src: Path, dst: Path) -> None:
+    """Copy a texture, stretched to sides that are multiples of the 4x4 compression block:
+    WebGL rejects a BC-compressed texture otherwise (the monsters' 1x1 solid-colour skins).
+    UVs are normalised, so the stretch keeps the mapping."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(src) as image:
+        w, h = image.size
+        size = (-(-w // TEXTURE_BLOCK) * TEXTURE_BLOCK, -(-h // TEXTURE_BLOCK) * TEXTURE_BLOCK)
+        if size == (w, h):
+            shutil.copyfile(src, dst)
+            return
+        image.resize(size, Image.Resampling.LANCZOS).save(dst, quality=JPEG_QUALITY)
+
+
+def encode_vorbis(ffmpeg: str, oggenc: str, src: Path, dst: Path, rate: int | None) -> None:
+    """Re-encode `src` as Ogg Vorbis with libvorbis (oggenc), keeping its channel count;
+    ffmpeg decodes it, resampled to `rate` when given."""
+    resample = ["-ar", str(rate)] if rate else []
+    decode = [ffmpeg, "-loglevel", "error", "-i", str(src), "-map_metadata", "-1", "-fflags", "+bitexact", *resample,
+              "-sample_fmt", "s16", "-f", "wav", "-"]
+    with subprocess.Popen(decode, stdout=subprocess.PIPE) as decoder:
+        subprocess.run([oggenc, "-Q", "-q", str(VORBIS_QUALITY), "-o", str(dst), "-"], stdin=decoder.stdout, check=True)
+    if decoder.returncode:
+        raise subprocess.CalledProcessError(decoder.returncode, decode)
 
 
 def camera_pose(m) -> tuple[list[float], list[float]]:
@@ -311,21 +363,14 @@ class Exporter:
 
     def copy_textures(self) -> None:
         for uri, resource in self.textures.items():
-            dst = self.out / resource.lstrip("/")
-            dst.parent.mkdir(parents=True, exist_ok=True)
             src = self.textures_dir / Path(resource).relative_to("/assets/textures")
-            shutil.copyfile(src, dst)
+            copy_texture(src, self.out / resource.lstrip("/"))
         # Textures swapped in at runtime.
         for rel in RUNTIME_TEXTURES:
-            dst = self.out / "assets" / "textures" / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(self.textures_dir / rel, dst)
+            copy_texture(self.textures_dir / rel, self.out / "assets" / "textures" / rel)
         # Tower bases take the location's ground texture at runtime.
         for location in self.locations:
-            src = self.textures_dir / "Towers" / f"dno{location}.png"
-            dst = self.out / self.ground_texture(location).lstrip("/")
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(src, dst)
+            copy_texture(self.textures_dir / "Towers" / f"dno{location}.png", self.out / self.ground_texture(location).lstrip("/"))
 
     @staticmethod
     def ground_texture(location: int) -> str:
@@ -362,28 +407,38 @@ class Exporter:
             shutil.copyfile(self.godot / "data" / name, data_dir / name)
 
     def copy_audio(self) -> list[str]:
+        """Copy the sounds into assets/audio; returns the shipped file names, one per stem."""
         audio_dir = self.out / "assets" / "audio"
-        audio_dir.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(audio_dir, ignore_errors=True)  # a sound that changed format leaves no stale copy
+        audio_dir.mkdir(parents=True)
         names = []
-        ffmpeg = shutil.which("ffmpeg")
+        ffmpeg, oggenc = shutil.which("ffmpeg"), shutil.which("oggenc")
         for src in sorted((self.godot / "assets" / "audio").iterdir()):
-            if src.suffix not in SOUND_EXTENSIONS:
-                continue
-            dst = audio_dir / src.name
-            if src.suffix == ".wav" and ffmpeg and needs_resample(src):
-                # Most effects are 8 kHz 8-bit; the engine's mixer upsamples them with no
-                # filtering and they sound harsh (the rebutton hover). ffmpeg's resampler
-                # gives the soft sound the original's DirectSound played.
-                subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", str(src), "-ar", str(WAV_RATE),
-                                "-sample_fmt", "s16", str(dst)], check=True)
-            elif src.suffix == ".ogg" and ffmpeg:
+            if src.suffix not in SOUND_EXTENSIONS or any(Path(n).stem == src.stem for n in names):
+                continue  # menu.wav: the menu.ogg music (sorted first) takes the component id
+            wav = src.suffix == ".wav"
+            # Most effects are 8 kHz 8-bit; the engine's mixer upsamples them with no
+            # filtering and they sound harsh (the rebutton hover). ffmpeg's resampler
+            # gives the soft sound the original's DirectSound played.
+            rate = WAV_RATE if wav and needs_resample(src) else None
+            if ffmpeg and oggenc and (not wav or wav_seconds(src) > LONG_SOUND_SECONDS):
                 # The original's Vorbis streams (remuxed by the Godot pipeline) fail in the
-                # engine's web decoder; a plain re-encode plays everywhere (ffmpeg's own
-                # Vorbis encoder is stereo only).
-                subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", str(src), "-ac", "2", "-c:a", "vorbis", "-strict", "-2", "-q:a", "5", str(dst)], check=True)
+                # engine's web decoder; a plain libvorbis re-encode plays everywhere and keeps
+                # the mono music mono.
+                dst = audio_dir / f"{src.stem}.ogg"
+                encode_vorbis(ffmpeg, oggenc, src, dst, rate)
+            elif ffmpeg and not wav:
+                dst = audio_dir / src.name  # no oggenc: ffmpeg's own Vorbis encoder is stereo only
+                subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", str(src), "-ac", "2", "-c:a", "vorbis",
+                                "-strict", "-2", "-q:a", "5", str(dst)], check=True)
+            elif ffmpeg and rate:
+                dst = audio_dir / src.name
+                subprocess.run([ffmpeg, "-y", "-loglevel", "error", "-i", str(src), "-ar", str(rate),
+                                "-sample_fmt", "s16", str(dst)], check=True)
             else:
+                dst = audio_dir / src.name
                 shutil.copyfile(src, dst)
-            names.append(src.name)
+            names.append(dst.name)
         return names
 
     # --- generated Lua / go ----------------------------------------------------------------
@@ -615,12 +670,8 @@ class Exporter:
 
     def write_sounds_go(self, names: list[str]) -> None:
         lines = []
-        seen: set[str] = set()
         for name in names:
             stem = Path(name).stem
-            if stem in seen:
-                continue  # menu.wav / menu.ogg: the component id is the stem
-            seen.add(stem)
             is_music = stem.startswith("music") or stem == "menu"
             loop = "1" if is_music or stem in LOOPED_SOUNDS else "0"
             group = SOUND_GROUP_MUSIC if is_music else SOUND_GROUP_SFX
@@ -634,6 +685,7 @@ class Exporter:
         self.copy_textures()
         self.copy_data()
         export_hud_atlas(self.textures_dir / "gui.png", self.out, {"loading": self.textures_dir / "Menu" / "Loading.png"})
+        export_icons(self.godot / "icons", self.out)
         self.write_render_passes()
         self.write_common()
         for location in self.locations:

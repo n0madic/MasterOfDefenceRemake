@@ -3,6 +3,7 @@ title = Master of Defense
 version = 1.0
 dependencies#0 = 
 custom_resources = /data,/generated/bones
+bundle_resources = /generated/bundle
 
 [bootstrap]
 main_collection = /main/main.collectionc
@@ -47,6 +48,23 @@ max_count = 16
 
 [android]
 package = com.masterofdefense.defold
+app_icon_36x36 = /generated/icons/android_36.png
+app_icon_48x48 = /generated/icons/android_48.png
+app_icon_72x72 = /generated/icons/android_72.png
+app_icon_96x96 = /generated/icons/android_96.png
+app_icon_144x144 = /generated/icons/android_144.png
+app_icon_192x192 = /generated/icons/android_192.png
 
 [ios]
 bundle_identifier = com.masterofdefense.defold
+app_icon_76x76 = /generated/icons/ios_76.png
+app_icon_120x120 = /generated/icons/ios_120.png
+app_icon_152x152 = /generated/icons/ios_152.png
+app_icon_167x167 = /generated/icons/ios_167.png
+app_icon_180x180 = /generated/icons/ios_180.png
+
+[osx]
+app_icon = /generated/icons/icon.icns
+
+[windows]
+app_icon = /generated/icons/icon.ico

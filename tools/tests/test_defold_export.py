@@ -445,5 +445,53 @@ class DefoldExportTests(unittest.TestCase):
         click = sounds[sounds.index('id: "click"'):]
         self.assertIn('group: \\"sfx\\"', click[:300])
 
+    def test_compressed_textures_are_block_aligned(self) -> None:
+        # WebGL rejects BC textures whose sides are not multiples of 4 (Sve/Thorn skins are 1x1).
+        from PIL import Image
+        textures = [p for p in (self.out / "assets" / "textures").rglob("*") if p.suffix in (".png", ".jpg")]
+        self.assertIn("Sve.jpg", {p.name for p in textures})
+        for path in textures:
+            with Image.open(path) as image:
+                self.assertEqual([side % self.module.TEXTURE_BLOCK for side in image.size], [0, 0], path)
+        with Image.open(self.out / "assets" / "textures" / "Monsters" / "Sve.jpg") as sve:
+            self.assertEqual(sve.size, (4, 4))
+            self.assertEqual(len(sve.getcolors()), 1)  # still one solid colour
+
+    def test_long_sounds_ship_as_mono_vorbis_and_effects_as_pcm(self) -> None:
+        import shutil
+        import subprocess
+        if not (shutil.which("ffmpeg") and shutil.which("oggenc")):
+            self.skipTest("needs ffmpeg and oggenc")
+        audio = self.out / "assets" / "audio"
+        self.assertGreater(self.module.wav_seconds(GODOT_DIR / "assets" / "audio" / "congr.wav"), 9.0)
+        self.assertLess(self.module.wav_seconds(GODOT_DIR / "assets" / "audio" / "rebutton.wav"), 0.1)
+        sounds = (self.out / "generated" / "sounds.go").read_text()
+        for name in ("congr.ogg", "tlen.ogg", "click.ogg", "rebutton.wav", "menu.ogg"):
+            self.assertIn(f"/assets/audio/{name}", sounds)
+            self.assertTrue((audio / name).exists(), name)
+        self.assertNotIn("menu.wav", sounds)
+        self.assertEqual(sounds.count('id: "menu"'), 1)
+        channels = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=channels", "-of", "csv=p=0",
+                                   str(audio / "music1.ogg")], capture_output=True, text=True, check=True).stdout
+        self.assertEqual(channels.strip(), "1")  # the original music is mono
+
+    def test_game_project_icons_are_exported(self) -> None:
+        from PIL import Image
+        project = (ROOT / "defold" / "game.project").read_text()
+        icons = re.findall(r"^(app_icon\w*|bundle_resources) = /(\S+)$", project, re.M)
+        self.assertEqual(len(icons), 14)  # android 6 + ios 5 + icns + ico + bundle resources
+        for key, path in icons:
+            self.assertTrue((self.out / path).exists(), f"{key} -> {path}")
+            size = re.fullmatch(r"app_icon_(\d+)x\1", key)
+            if size:
+                self.assertEqual(Image.open(self.out / path).size, (int(size[1]),) * 2, key)
+        bundle = self.out / dict(icons)["bundle_resources"]
+        res = bundle / "android" / "res"
+        xml = (res / "drawable-anydpi-v26" / "icon.xml").read_text()
+        for layer in re.findall(r'android:drawable="@drawable/(\w+)"', xml):
+            self.assertTrue((res / "drawable-xxxhdpi" / f"{layer}.png").exists(), layer)
+        self.assertTrue((bundle / "web" / "favicon.ico").exists())
+        self.assertEqual(Image.open(self.out / "generated" / "icons" / "ios_180.png").mode, "RGB")  # opaque
+
 if __name__ == "__main__":
     unittest.main()
