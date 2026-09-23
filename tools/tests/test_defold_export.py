@@ -437,6 +437,15 @@ class DefoldExportTests(unittest.TestCase):
         self.assertIn('{group = "river", columns = 8, rows = 8, frames = 63, step = 1.000000}', l1[:l1.index("\n}")])
         go = (self.out / "generated" / "go" / "Location1.go").read_text()
         self.assertIn('id: "river"', go)
+        # The frame is filtered by hand with its taps wrapped inside the frame: hardware
+        # filtering would blend the neighbouring atlas frame into every wrap line.
+        river = (self.out / "generated" / "models" / "Location1_river.model").read_text()
+        material = re.search(r'material: "/generated/materials/(\w+)\.material"', river)[1]
+        fp = (self.out / "generated" / "materials" / f"{material}.fp").read_text()
+        self.assertRegex(fp, r"c = \w+\(c, sample_frame\(\w+, var_texcoord0\)\);")
+        self.assertIn("texelFetch(tex, origin + i0, lod)", fp)
+        self.assertIn("% size", fp)
+        self.assertNotIn("textureGrad", fp)
 
     def test_sounds_are_grouped_for_the_volume_settings(self) -> None:
         sounds = (self.out / "generated" / "sounds.go").read_text()

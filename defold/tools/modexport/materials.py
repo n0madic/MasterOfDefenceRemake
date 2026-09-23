@@ -420,13 +420,39 @@ class MaterialVariant:
             "",
         ]
         if self.frame_atlas:
-            # The frame repeats over the brush like a texture of its own: wrap inside the
-            # frame, with the gradients of the unwrapped UVs so the wrap seam keeps its mip.
+            # The frame repeats over the brush like a texture of its own. Hardware filtering
+            # at the frame's edge would blend in a strip of the neighbouring atlas frame (another
+            # phase of the animation: a flickering seam along every wrap line), so the frame is
+            # filtered by hand -- trilinear, the four taps wrapped inside the frame. The mip
+            # comes from the gradients of the unwrapped UVs; mips never mix frames, since the
+            # frames sit on a power-of-two grid.
             lines += [
+                "vec4 frame_bilinear(sampler2D tex, vec2 uv, int lod)",
+                "{",
+                "    vec2 atlas = vec2(textureSize(tex, lod));",
+                "    ivec2 origin = ivec2(frame_atlas.xy * atlas + 0.5);",
+                "    ivec2 size = max(ivec2(frame_atlas.zw * atlas + 0.5), ivec2(1));",
+                "    vec2 p = fract(uv) * vec2(size) - 0.5;",
+                "    vec2 f = fract(p);",
+                "    ivec2 i0 = (ivec2(floor(p)) + size) % size;",
+                "    ivec2 i1 = (i0 + 1) % size;",
+                "    vec4 a = texelFetch(tex, origin + i0, lod);",
+                "    vec4 b = texelFetch(tex, origin + ivec2(i1.x, i0.y), lod);",
+                "    vec4 c = texelFetch(tex, origin + ivec2(i0.x, i1.y), lod);",
+                "    vec4 d = texelFetch(tex, origin + i1, lod);",
+                "    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);",
+                "}",
+                "",
                 "vec4 sample_frame(sampler2D tex, vec2 uv)",
                 "{",
-                "    vec2 size = frame_atlas.zw;",
-                "    return textureGrad(tex, frame_atlas.xy + fract(uv) * size, dFdx(uv) * size, dFdy(uv) * size);",
+                "    vec2 texels = frame_atlas.zw * vec2(textureSize(tex, 0));",
+                "    vec2 dx = dFdx(uv) * texels;",
+                "    vec2 dy = dFdy(uv) * texels;",
+                "    float max_lod = log2(max(min(texels.x, texels.y), 1.0));",
+                "    float lod = clamp(0.5 * log2(max(max(dot(dx, dx), dot(dy, dy)), 1e-8)), 0.0, max_lod);",
+                "    int l0 = int(floor(lod));",
+                "    int l1 = min(l0 + 1, int(max_lod));",
+                "    return mix(frame_bilinear(tex, uv, l0), frame_bilinear(tex, uv, l1), lod - float(l0));",
                 "}",
                 "",
             ]
