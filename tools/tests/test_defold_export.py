@@ -225,6 +225,13 @@ class DefoldExportTests(unittest.TestCase):
         self.assertIn("uv_offset", "".join((self.out / "generated" / "materials" / f).read_text()
                                            for f in ("Towers_Freeze_0.vp", "Towers_Freeze_1.vp", "Towers_Freeze_2.vp")))
 
+    def test_animmap_v_offset_follows_defold_v_flip(self) -> None:
+        # faces.b3d: frame f shows cell (f % 8, f // 8) of the 8x4 portrait atlas; Blitz
+        # shifts the texture by (f / 8, row / 4), Defold's flipped V needs -row / 4.
+        keys = self.exporter.models["faces"]["animmaps"][0]["keys"]
+        self.assertEqual(keys[12], [1.5, -0.25])  # Spi, row 1
+        self.assertEqual(keys[28], [3.5, -0.75])  # Tall, row 3
+
     def test_monster_keeps_morph_targets_and_a_lit_material(self) -> None:
         doc, _ = self.glb("Monsters_Nite")
         prim = doc["meshes"][0]["primitives"][0]

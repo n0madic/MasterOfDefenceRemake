@@ -581,7 +581,9 @@ class ModelExporter:
     # --- ANIMMAP keys ----------------------------------------------------------------------
 
     def animmap_keys(self) -> list[dict]:
-        """Per ANIMMAP material: the UV offset per integer frame, Blitz `PositionTexture(-x, -y)`."""
+        """Per ANIMMAP material: the UV offset per integer frame, Blitz `PositionTexture(-x, -y)`.
+        Defold flips V of every imported texcoord (v' = 1 - v), so the V offset changes sign
+        (`faces`: a wrong sign swaps atlas rows 1 and 3 while rows 0 and 2 look right)."""
         out = []
         nodes = self.doc["nodes"]
         for n, (material_name, tag_index) in enumerate(self.animmap_materials.items()):
@@ -593,7 +595,7 @@ class ModelExporter:
             keys = []
             for f in range(frames + 1):
                 p = sample_track(track[0], track[1], float(f)) if track else nodes[uvpos].get("translation", [0.0, 0.0, 0.0])
-                keys.append([round(-p[0], 6), round(-p[1], 6)])
+                keys.append([round(-p[0], 6), round(p[1], 6)])
             out.append({"group": GROUP_ANIM + str(n), "material": material_name, "keys": keys})
         return out
 
