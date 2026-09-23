@@ -12,9 +12,10 @@ local passes = require("generated.render_passes")
 local messages = require("main.messages")
 local screen = require("main.screen")
 
--- The world fills the canvas and the overlay (HUD panel, sheets) the 4:3 box of
--- main/screen.lua (the gui is fitted into the same box by the engine's ADJUST_FIT); the
--- rest of the window stays at the clear colour.
+-- The world, the overlay (HUD panel, sheets) and the gui fill the canvas of main/screen.lua;
+-- the overlay and the gui keep the 4:3 box's coordinates in it, and the HUD's anchored
+-- groups move out of the box to the canvas edges (`hud_shift`, tools/targets/defold/
+-- hud_layout.py). The rest of the window stays at the clear colour.
 
 local BLEND_FUNCS = {
 	blend = {graphics.BLEND_FACTOR_SRC_ALPHA, graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA},
@@ -58,18 +59,11 @@ local function set_state(state, last)
 	end
 end
 
--- `overlay` ({box, canvas, box_projection, canvas_projection}): the overlay's passes switch
--- between the 4:3 box and the whole canvas (a pass's `canvas`); the caller set the box.
-local function draw_passes(list, options, overlay)
+local function draw_passes(list, options)
 	local last
 	for _, pass in ipairs(list) do
 		local state = pass.state
 		set_state(state, last)
-		if overlay and state.canvas ~= (last ~= nil and last.canvas) then
-			local rect = state.canvas and overlay.canvas or overlay.box
-			render.set_viewport(rect.x, rect.y, rect.w, rect.h)
-			render.set_projection(state.canvas and overlay.canvas_projection or overlay.box_projection)
-		end
 		render.draw(pass.predicate, options)
 		last = state
 	end
@@ -123,13 +117,9 @@ function init(self)
 	self.depth_clear = {[graphics.BUFFER_TYPE_DEPTH_BIT] = 1}
 	self.gui_predicate = render.predicate({"gui"})
 	self.text_predicate = render.predicate({"text"})
-	self.gui_projection = vmath.matrix4_orthographic(0, screen.WIDTH, 0, screen.HEIGHT, -1, 1)
-	-- The HUD panel is drawn by a fixed camera at the origin (matching camera.go: fov,
-	-- 4:3, near 0.5, far 600) so it never moves with the scrolling world camera.
-	self.hud_projection = vmath.matrix4_perspective(screen.FOV, screen.ASPECT, 0.5, 600)
-	-- The same camera over the whole canvas (the 4:3 frame kept, so the box part is
-	-- unchanged).
-	self.overlay = {box_projection = self.hud_projection}
+	-- The overlay's and the gui's projections for the current canvas (`layout_projections`).
+	self.projections = {}
+	self.hud_shift = vmath.vector4()
 	set_clear_color(self, vmath.vector4(0, 0, 0, 1))
 	-- The gamma setting (`_fsetgammaintensity`, -100..100): while it is not 0 the frame is
 	-- drawn into `self.frame` and copied to the window with the offset added.
@@ -208,8 +198,32 @@ local function apply_gamma(self, width, height)
 	render.disable_texture("frame")
 end
 
--- The world (canvas) and the overlay (box) through the screen's camera.
-local function draw_scene(self, cam, canvas, box)
+-- For the canvas and box of this frame: the overlay's projection (the HUD panel and the
+-- sheets are drawn by a fixed camera at the origin -- camera.go's fov, near 0.5, far 600 --
+-- so they never move with the scrolling world camera; the 4:3 frame is kept, so the box
+-- part is unchanged), the gui's (its 800x600 box coordinates, the margins around them) and
+-- the anchored HUD groups' clip-space shifts (left, top, right, bottom; y up).
+local function layout_projections(self, canvas, box, window_width, window_height)
+	local p = self.projections
+	local aspect = canvas.w / canvas.h
+	if p.aspect ~= aspect then
+		p.aspect = aspect
+		p.overlay = vmath.matrix4_perspective(screen.fov(aspect), aspect, 0.5, 600)
+	end
+	local l, t, r, b = screen.margins(canvas, box)
+	if p.l ~= l or p.t ~= t or p.r ~= r or p.b ~= b then
+		p.l, p.t, p.r, p.b = l, t, r, b
+		p.gui = vmath.matrix4_orthographic(-l, screen.WIDTH + r, -b, screen.HEIGHT + t, -1, 1)
+	end
+	local sl, st, sr, sb = screen.anchor_shifts(window_width, window_height)
+	local cw, ch = screen.WIDTH + l + r, screen.HEIGHT + t + b
+	self.hud_shift.x, self.hud_shift.y = 2 * sl / cw, -2 * st / ch
+	self.hud_shift.z, self.hud_shift.w = 2 * sr / cw, -2 * sb / ch
+	self.constants.hud_shift = self.hud_shift
+end
+
+-- The world and the overlay through the screen's camera.
+local function draw_scene(self, cam, canvas)
 	render.set_viewport(canvas.x, canvas.y, canvas.w, canvas.h)
 	-- The screen's camera with the canvas's aspect and field of view (its projection is
 	-- also what the scripts project with). No frustum culling: a bone-posed model's
@@ -237,16 +251,9 @@ local function draw_scene(self, cam, canvas, box)
 	-- set_projection take effect) and draw it with a fixed camera at the origin, so its
 	-- coplanar decals never jitter or sort-flicker while the world camera scrolls.
 	render.set_camera()
-	render.set_viewport(box.x, box.y, box.w, box.h)
 	render.set_view(IDENTITY)
-	render.set_projection(self.hud_projection)
-	local overlay = self.overlay
-	overlay.box, overlay.canvas = box, canvas
-	if overlay.canvas_aspect ~= aspect then
-		overlay.canvas_aspect = aspect
-		overlay.canvas_projection = vmath.matrix4_perspective(screen.fov(aspect), aspect, 0.5, 600)
-	end
-	draw_passes(self.overlay_passes, self.draw_options, overlay)
+	render.set_projection(self.projections.overlay)
+	draw_passes(self.overlay_passes, self.draw_options)
 	render.set_color_mask(true, true, true, true)
 	render.set_depth_mask(false)
 	render.disable_state(graphics.STATE_DEPTH_TEST)
@@ -258,22 +265,24 @@ local function draw_frame(self, window_width, window_height)
 	render.set_depth_mask(true)
 	render.set_color_mask(true, true, true, true)
 	render.set_stencil_mask(0xff)
-	-- The clear covers the viewport only (Vulkan), which is still the last frame's gui box:
-	-- while a screen loads nothing else redraws the canvas outside it (Wide mode showed the
-	-- previous screen beside the Loading plank).
+	-- The whole window: a clear may cover only the viewport (Vulkan), and a screen's canvas
+	-- can be narrower than the last one's (while a screen loads nothing else redraws the
+	-- window around it: Wide mode showed the previous screen beside the Loading plank).
+	render.set_viewport(0, 0, window_width, window_height)
 	render.clear(self.clear_buffers)
 	local canvas, box = screen.layout(window_width, window_height)
+	layout_projections(self, canvas, box, window_width, window_height)
 	-- No camera while a screen is being switched: only the gui (the Loading plank) draws.
 	local cameras = camera.get_cameras()
 	if #cameras > 0 then
-		draw_scene(self, cameras[#cameras], canvas, box)
+		draw_scene(self, cameras[#cameras], canvas)
 	end
 
-	-- The gui in the box: its scenes keep their 800x600 reference coordinates
-	-- (`ADJUST_REFERENCE_DISABLED`), mapped onto the box like the overlay.
-	render.set_viewport(box.x, box.y, box.w, box.h)
+	-- The gui: its scenes keep their 800x600 reference coordinates
+	-- (`ADJUST_REFERENCE_DISABLED`), the box's place in the canvas like the overlay.
+	render.set_viewport(canvas.x, canvas.y, canvas.w, canvas.h)
 	render.set_view(IDENTITY)
-	render.set_projection(self.gui_projection)
+	render.set_projection(self.projections.gui)
 	render.enable_state(graphics.STATE_BLEND)
 	render.set_blend_func(graphics.BLEND_FACTOR_SRC_ALPHA, graphics.BLEND_FACTOR_ONE_MINUS_SRC_ALPHA)
 	render.enable_state(graphics.STATE_STENCIL_TEST)

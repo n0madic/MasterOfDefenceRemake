@@ -77,6 +77,7 @@ function M.new(id, key, items, cursor_id)
 	end
 	self.hidden = {}     -- joint index -> true (the node or an ancestor is hidden)
 	self.hidden_nodes = {}  -- joint index -> true (hidden itself)
+	self.parked = {}        -- joint index -> true (parked outside the 4:3 frame, `cull_parked`)
 	self.offsets = {}       -- joint index -> vector3: the node (and its children) moved
 	self.disabled = {}   -- item -> true (`EntityPickMode 0`: visible, not pickable)
 	self.passive = {}    -- item -> true (pickable, never hovered or clicked: slider backs)
@@ -129,6 +130,9 @@ end
 
 function M:seek(t)
 	self.mode, self.time = M.ANIM_NONE, t
+	if self.obj.meta.joint_bounds then
+		self:cull_parked()
+	end
 	self:pose()
 end
 
@@ -153,6 +157,16 @@ local function joint_of(self, name)
 	return self.obj.meta.joints[name]
 end
 
+-- The joints drawn collapsed: hidden or parked themselves, or under such a joint.
+local function update_hidden(self)
+	local parents = self.obj.meta.joint_parents
+	self.hidden = {}
+	for k = 1, #parents do  -- parents precede their children
+		local p = parents[k]
+		self.hidden[k] = self.hidden_nodes[k] or self.parked[k] or (p > 0 and self.hidden[p]) or nil
+	end
+end
+
 -- Blitz `HideEntity` / `ShowEntity` of node `name` (its children go with it).
 function M:set_node_visible(name, on)
 	local j = joint_of(self, name)
@@ -160,13 +174,33 @@ function M:set_node_visible(name, on)
 		return
 	end
 	self.hidden_nodes[j] = (not on) or nil
-	local parents = self.obj.meta.joint_parents
-	self.hidden = {}
-	for k = 1, #parents do  -- parents precede their children
-		local p = parents[k]
-		self.hidden[k] = self.hidden_nodes[k] or (p > 0 and self.hidden[p]) or nil
-	end
+	update_hidden(self)
 	self:pose()
+end
+
+-- The original parks unused nodes just outside the 800x600 frame (the tutorial's pointers:
+-- its animation moves them ~3.8 units down); the overlay covers the whole canvas in Wide
+-- mode and would show them, so every joint with drawn vertices (the generated
+-- `joint_bounds`) that lies entirely outside the 4:3 frame at the current frame is hidden
+-- (godot HudLayout.cull_parked).
+function M:cull_parked()
+	local world = go.get_world_transform(self.obj.id)
+	local tan_v = screen.tan_half_fov(screen.ASPECT)
+	local tan_h = tan_v * screen.ASPECT
+	for j, b in pairs(self.obj.meta.joint_bounds) do
+		local m = world * model.joint_matrix(self.obj, self.time, j)
+		local lo, hi
+		for corner = 0, 7 do
+			local p = m * vmath.vector4(corner % 2 == 0 and b[1] or b[4], corner % 4 < 2 and b[2] or b[5], corner < 4 and b[3] or b[6], 1)
+			lo = lo and vmath.vector3(math.min(lo.x, p.x), math.min(lo.y, p.y), math.min(lo.z, p.z)) or vmath.vector3(p.x, p.y, p.z)
+			hi = hi and vmath.vector3(math.max(hi.x, p.x), math.max(hi.y, p.y), math.max(hi.z, p.z)) or vmath.vector3(p.x, p.y, p.z)
+		end
+		local depth = -(lo.z + hi.z) / 2
+		local half_w, half_h = depth * tan_h, depth * tan_v
+		local inside = depth > 0 and lo.x < half_w and hi.x > -half_w and lo.y < half_h and hi.y > -half_h
+		self.parked[j] = (not inside) or nil
+	end
+	update_hidden(self)
 end
 
 -- The `titul` plank of the main menu and the map: hidden below difficulty tier 1, else

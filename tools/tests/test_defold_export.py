@@ -376,20 +376,80 @@ class DefoldExportTests(unittest.TestCase):
         # The panel draws before the sheets over it (their depth companions and layers).
         self.assertLess(max(track), passes.index('"hud_solid", "opaque"'))
 
+    def test_hud_vertices_carry_wide_screen_anchors(self) -> None:
+        # godot HudLayout: the panel's groups keep the canvas edges; the plain planks between
+        # a post and the info panel are cut at their thresholds and stretch.
+        doc, blob = self.glb("Env")
+        mesh_of = {n["name"]: n["mesh"] for n in doc["nodes"] if "mesh" in n}
+
+        def anchors(name: str) -> list[tuple[float, float]]:
+            return [a for p in doc["meshes"][mesh_of[name]]["primitives"] for a in read_accessor(doc, blob, p["attributes"]["TEXCOORD_1"])]
+
+        self.assertEqual(set(anchors("goldIcon")), {(-1.0, -1.0)})
+        self.assertEqual(set(anchors("inhabs")), {(1.0, -1.0)})
+        self.assertEqual(set(anchors("infopanel")), {(0.0, 1.0)})
+        left = anchors("leftside")
+        self.assertEqual({a[1] for a in left}, {1.0})
+        self.assertAlmostEqual(min(a[0] for a in left), -1.0)
+        self.assertAlmostEqual(max(a[0] for a in left), 0.0)
+        # Both posts in one mesh: the left one keeps the left edge, the right one the right.
+        self.assertEqual({a[0] for a in anchors("Plane10")}, {-1.0, 1.0})
+        # The skills sheet has no rule: centred with the box.
+        updates, ublob = self.glb("Env_updates")
+        self.assertEqual({a for p in updates["meshes"][0]["primitives"] for a in read_accessor(updates, ublob, p["attributes"]["TEXCOORD_1"])},
+                         {(0.0, 0.0)})
+        vp = (self.out / "generated" / "materials" / "Env_0.vp").read_text()
+        self.assertIn("in mediump vec2 texcoord1;", vp)
+        self.assertIn("gl_Position.xy += anchor * side * gl_Position.w;", vp)
+        material = (self.out / "generated" / "materials" / "Env_0.material").read_text()
+        self.assertIn('name: "hud_shift"', material)
+        # Other overlays are not anchored.
+        for material_file in (self.out / "generated" / "materials").glob("Menu_buttons_*.vp"):
+            self.assertNotIn("hud_shift", material_file.read_text())
+
+    def test_tutorial_pointers_can_be_culled_when_parked(self) -> None:
+        models = (self.out / "generated" / "models.lua").read_text()
+        entry = models[models.index('M["tutorial"]'):]
+        entry = entry[:entry.index("\n}")]
+        self.assertIn("joint_bounds = {", entry)
+        self.assertNotIn("joint_bounds", models[models.index('M["Menu/buttons"]'):][:2000])
+
+    def test_anchor_cuts_keep_winding_and_blend_linearly(self) -> None:
+        from targets.defold.hud_layout import anchor_mesh
+        # A unit quad in u (0..1), stretched between thresholds 0.25 / 0.75.
+        attrs = {"POSITION": [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 1.0, 0.0)],
+                 "NORMAL": [(0.0, 0.0, 1.0)] * 4,
+                 "TEXCOORD_0": [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]}
+        out, indices, anchors = anchor_mesh(attrs, [0, 1, 2, 0, 2, 3], {"u": (0.25, 0.75, -1.0, 1.0), "ay": 1.0})
+        self.assertEqual(indices, list(range(len(out["POSITION"]))))
+        for p, uv, a in zip(out["POSITION"], out["TEXCOORD_0"], anchors):
+            self.assertAlmostEqual(p[0], uv[0])
+            expected = -1.0 if uv[0] <= 0.25 else 1.0 if uv[0] >= 0.75 else -1.0 + 2.0 * (uv[0] - 0.25) / 0.5
+            self.assertAlmostEqual(a[0], expected)
+            self.assertEqual(a[1], 1.0)
+        self.assertTrue({0.25, 0.75} <= {round(p[0], 6) for p in out["POSITION"]})
+        for t in range(0, len(indices), 3):
+            a, b, c = (out["POSITION"][i] for i in indices[t:t + 3])
+            cross_z = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+            self.assertGreaterEqual(cross_z, 0.0)  # counter-clockwise like the source
+        # A constant anchor keeps the mesh as it is.
+        same, same_indices, constant = anchor_mesh(attrs, [0, 1, 2, 0, 2, 3], (1.0, -1.0))
+        self.assertEqual((same, same_indices, set(constant)), (attrs, [0, 1, 2, 0, 2, 3], {(1.0, -1.0)}))
+
     def test_loading_sheet_takes_its_run_time_entity_orders(self) -> None:
-        # `_floadmenu`: EntityOrder fon, -5 / loading, -6 -- drawn over the menu sheets, across
-        # the whole canvas (the curtain covers Wide's sides too).
+        # `_floadmenu`: EntityOrder fon, -5 / loading, -6 -- drawn over the menu sheets (the
+        # overlay covers the whole canvas, so the curtain covers Wide's sides too).
         model = (self.out / "generated" / "models" / "Menu_loading.model").read_text()
         tags = set()
         for material in re.findall(r'material: "([^"]+)"', model):
             text = (self.out / material.lstrip("/")).read_text()
-            tags.add(re.search(r'tags: "(canvas[^"]*)"', text).group(1))
-        self.assertEqual(tags, {"canvas_m5", "canvas_m6"})
+            tags.add(re.search(r'tags: "(hud_m[^"]*)"', text).group(1))
+        self.assertEqual(tags, {"hud_m5", "hud_m6"})
         passes = (self.out / "generated" / "render_passes.lua").read_text()
-        self.assertIn('{tags = {"canvas_m5", "blend"}, depth_test = false, depth_write = false, color_write = true, '
-                      'blend = "blend", canvas = true}', passes)
+        self.assertIn('{tags = {"hud_m5", "blend"}, depth_test = false, depth_write = false, color_write = true, '
+                      'blend = "blend"}', passes)
         # Blitz's order: all of -5 before any of -6.
-        self.assertLess(passes.index('"canvas_m5", "blend"'), passes.index('"hud_m6", "blend"'))
+        self.assertLess(passes.index('"hud_m5", "blend"'), passes.index('"hud_m6", "blend"'))
 
     def test_menu_sheets_are_posed_pickable_and_layered(self) -> None:
         menus = (self.out / "generated" / "menus.lua").read_text()

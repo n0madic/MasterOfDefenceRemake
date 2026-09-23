@@ -44,32 +44,43 @@ M.SKILL_ROWS = {
 }
 M.SKILL_PLUS_X, M.SKILL_MINUS_X, M.SKILL_TEXT_X, M.SKILL_BUTTON = 520, 550, 470, 30
 M.COLOR_STORY = {0, 1, 130 / 255}
+-- Wide-screen anchors (godot HudLayout): -1 / 0 / 1 per axis = left or top edge of the
+-- canvas, centred with the box, right or bottom edge. Widgets and texts without one stay in
+-- the box.
+M.TOP_LEFT, M.TOP_CENTRE, M.TOP_RIGHT = {-1, -1}, {0, -1}, {1, -1}
+M.BOTTOM_LEFT, M.BOTTOM_CENTRE, M.BOTTOM_RIGHT = {-1, 1}, {0, 1}, {1, 1}
 M.TUTORIAL_TEXT = {x = 100, y = 105, spacing = 4.5}
 M.TUTORIAL_SKIP_LABEL = {x = 122, y = 347, scale = 0.8, text = 81}
 M.TUTORIAL_PAGE_HELP = 10
 
 -- --- widgets ----------------------------------------------------------------------------
 
-local function button(name, style, icon, x, y, w, h, tip)
-	return {name = name, kind = "button", style = style, icon = icon, x = x, y = y, w = w, h = h, tip = tip, visible = true}
+-- `x0`, `y0`: the widget's place in the box; `x`, `y`: where it is this frame (`build`).
+local function button(name, style, icon, x, y, w, h, tip, anchor)
+	return {name = name, kind = "button", style = style, icon = icon, x0 = x, y0 = y, x = x, y = y, w = w, h = h,
+		tip = tip, anchor = anchor, visible = true}
+end
+
+local function rect(name, kind, r, tip, anchor)
+	return {name = name, kind = kind, x0 = r.x, y0 = r.y, x = r.x, y = r.y, w = r.w, h = r.h, tip = tip, anchor = anchor, visible = true}
 end
 
 function M.build_widgets()
 	local w = {}
 	for type_id = 1, 5 do
-		w[#w + 1] = button("tower" .. type_id, M.STYLE_BIG, type_id, M.TOWER_BUTTON_X[type_id], M.TOWER_BUTTON_Y, 64, 64, 20 + type_id)
+		w[#w + 1] = button("tower" .. type_id, M.STYLE_BIG, type_id, M.TOWER_BUTTON_X[type_id], M.TOWER_BUTTON_Y, 64, 64, 20 + type_id, M.BOTTOM_LEFT)
 	end
-	w[#w + 1] = button("balloon", M.STYLE_BIG, 8, M.UPGRADE_SLOTS[3], M.TOWER_BUTTON_Y, 64, 64, 89)
-	w[#w + 1] = button("upgrade", M.STYLE_BIG, 6, 664, M.TOWER_BUTTON_Y, 64, 64, 26)
-	w[#w + 1] = button("sell", M.STYLE_BIG, 7, 737, M.TOWER_BUTTON_Y, 64, 64, 29)
-	w[#w + 1] = button("menu", M.STYLE_SMALL2, 1, 278, -3, 32, 32, 67)
-	w[#w + 1] = button("save", M.STYLE_SMALL2, 3, 310, -3, 32, 32, 65)
-	w[#w + 1] = button("load", M.STYLE_SMALL2, 0, 450, -3, 32, 32, 66)
-	w[#w + 1] = button("health", M.STYLE_SMALL1, 10, 483, -3, 32, 32, 79)
-	w[#w + 1] = button("skills", M.STYLE_SMALL2, 2, 600, 480, 35, 35, 68)
-	w[#w + 1] = button("stop", M.STYLE_SMALL2, 12, 590, 520, 30, 30, 100)
-	w[#w + 1] = {name = "slider", kind = "slider", x = M.SLIDER.x, y = M.SLIDER.y, w = M.SLIDER.w, h = M.SLIDER.h, tip = 31, visible = true}
-	w[#w + 1] = {name = "reset", kind = "rect", x = M.RESET_MARK.x, y = M.RESET_MARK.y, w = M.RESET_MARK.w, h = M.RESET_MARK.h, visible = true}
+	w[#w + 1] = button("balloon", M.STYLE_BIG, 8, M.UPGRADE_SLOTS[3], M.TOWER_BUTTON_Y, 64, 64, 89, M.BOTTOM_LEFT)
+	w[#w + 1] = button("upgrade", M.STYLE_BIG, 6, 664, M.TOWER_BUTTON_Y, 64, 64, 26, M.BOTTOM_RIGHT)
+	w[#w + 1] = button("sell", M.STYLE_BIG, 7, 737, M.TOWER_BUTTON_Y, 64, 64, 29, M.BOTTOM_RIGHT)
+	w[#w + 1] = button("menu", M.STYLE_SMALL2, 1, 278, -3, 32, 32, 67, M.TOP_CENTRE)
+	w[#w + 1] = button("save", M.STYLE_SMALL2, 3, 310, -3, 32, 32, 65, M.TOP_CENTRE)
+	w[#w + 1] = button("load", M.STYLE_SMALL2, 0, 450, -3, 32, 32, 66, M.TOP_CENTRE)
+	w[#w + 1] = button("health", M.STYLE_SMALL1, 10, 483, -3, 32, 32, 79, M.TOP_CENTRE)
+	w[#w + 1] = button("skills", M.STYLE_SMALL2, 2, 600, 480, 35, 35, 68, M.BOTTOM_CENTRE)
+	w[#w + 1] = button("stop", M.STYLE_SMALL2, 12, 590, 520, 30, 30, 100, M.BOTTOM_CENTRE)
+	w[#w + 1] = rect("slider", "slider", M.SLIDER, 31, M.BOTTOM_CENTRE)
+	w[#w + 1] = rect("reset", "rect", M.RESET_MARK, nil, M.BOTTOM_CENTRE)
 	for _, row in ipairs(M.SKILL_ROWS) do
 		local plus = button("skill_plus_" .. row[1], M.STYLE_SMALL1, 1, M.SKILL_PLUS_X, row[2], M.SKILL_BUTTON, M.SKILL_BUTTON, nil)
 		plus.skill, plus.downgrade, plus.row, plus.panel = row[1], false, row, true
@@ -82,7 +93,9 @@ function M.build_widgets()
 	local next_page = button("tutorial_next", M.STYLE_SMALL1, 9, 665, 345, 32, 32, nil)
 	next_page.tutorial = true
 	w[#w + 1] = next_page
-	w[#w + 1] = {name = "tutorial_skip", kind = "checkbox", x = 100, y = 345, w = 20, h = 20, visible = false, tutorial = true}
+	local skip = rect("tutorial_skip", "checkbox", {x = 100, y = 345, w = 20, h = 20})
+	skip.visible, skip.tutorial = false, true
+	w[#w + 1] = skip
 	local ok = button("skills_ok", M.STYLE_SMALL1, 2, 530, 405, 35, 35, nil)
 	ok.panel = true
 	local cancel = button("skills_cancel", M.STYLE_SMALL2, 4, 335, 402, 35, 35, nil)
@@ -96,6 +109,35 @@ M.widgets = M.build_widgets()
 M.by_name = {}
 for _, w in ipairs(M.widgets) do
 	M.by_name[w.name] = w
+end
+
+-- --- Wide-screen anchors -----------------------------------------------------------------
+
+-- How far the groups anchored to the left, top, right and bottom move out of the box, in
+-- box pixels (main/screen.lua `anchor_shifts`).
+M.shifts = {l = 0, t = 0, r = 0, b = 0}
+
+function M.set_anchor_shifts(l, t, r, b)
+	local s = M.shifts
+	s.l, s.t, s.r, s.b = l, t, r, b
+end
+
+-- The offset of a group at `anchor` (nil: the box).
+function M.anchor_offset(anchor)
+	if not anchor then
+		return 0, 0
+	end
+	local s = M.shifts
+	local ax, ay = anchor[1], anchor[2]
+	return ax * (ax > 0 and s.r or s.l), ay * (ay > 0 and s.b or s.t)
+end
+
+-- Every widget's place this frame: its box place moved with its anchor.
+function M.place_widgets()
+	for _, w in ipairs(M.widgets) do
+		local dx, dy = M.anchor_offset(w.anchor)
+		w.x, w.y = w.x0 + dx, w.y0 + dy
+	end
 end
 
 -- The interactive widget under box point (x, y), visibility as of the last `build`.
@@ -239,7 +281,8 @@ end
 
 local function text(t, x, y, color, opts)
 	opts = opts or {}
-	return {text = t, x = x, y = y, color = color, scale = opts.scale or 1, spacing = opts.spacing or 5,
+	local dx, dy = M.anchor_offset(opts.anchor)
+	return {text = t, x = x + dx, y = y + dy, color = color, scale = opts.scale or 1, spacing = opts.spacing or 5,
 		cx = opts.cx or false, cy = opts.cy or false, alpha = opts.alpha or 1}
 end
 
@@ -262,7 +305,7 @@ function M.build(game, ctx)
 		local w = e[1]
 		w.visible = e[2]
 		if w.visible then
-			w.x = M.UPGRADE_SLOTS[slot]
+			w.x0 = M.UPGRADE_SLOTS[slot]
 			slot = slot + 1
 		end
 	end
@@ -276,6 +319,7 @@ function M.build(game, ctx)
 	-- panel drawn but inert: only its own widgets, and the skills button that closes the
 	-- window, respond.
 	local modal = ((ctx.menu_open or ctx.end_screen) and "end_screen") or (ctx.skills_open and "panel") or nil
+	M.place_widgets()
 	for _, w in ipairs(M.widgets) do
 		w.inert = modal ~= nil and not w[modal] and not (modal == "panel" and w.name == "skills")
 		if w.panel then
@@ -300,15 +344,19 @@ function M.build(game, ctx)
 	ui.pressed = ctx.pressed
 	-- Texts.
 	ui.texts = {
-		gold = text(tostring(game.gold), 50, 9, M.COLOR_GOLD, {cx = true, cy = true}),
-		lifes = text(tostring(game.lifes), 760, 40, M.COLOR_LIFES, {cx = true, cy = true}),
-		extra = text(game.extra_lifes > 0 and ("+" .. game.extra_lifes) or "", 765, 55, M.COLOR_EXTRA, {scale = 0.9, spacing = 4}),
-		exp = text(tostring(game.experience), 15, 41, M.COLOR_EXP, {cx = true, cy = true}),
+		gold = text(tostring(game.gold), 50, 9, M.COLOR_GOLD, {cx = true, cy = true, anchor = M.TOP_LEFT}),
+		lifes = text(tostring(game.lifes), 760, 40, M.COLOR_LIFES, {cx = true, cy = true, anchor = M.TOP_RIGHT}),
+		extra = text(game.extra_lifes > 0 and ("+" .. game.extra_lifes) or "", 765, 55, M.COLOR_EXTRA,
+			{scale = 0.9, spacing = 4, anchor = M.TOP_RIGHT}),
+		exp = text(tostring(game.experience), 15, 41, M.COLOR_EXP, {cx = true, cy = true, anchor = M.TOP_LEFT}),
 		raid = text(game.survival_mode and string.format("%s: %d", d:text(48), game.curlevel)
-			or string.format("%s: %d/%d", d:text(48), game:raid_index_in_location(), game:raids_in_location()), 330, 5, M.COLOR_WHITE),
-		info = text(M.info_text(game), 400, 500, M.COLOR_WHITE),
+			or string.format("%s: %d/%d", d:text(48), game:raid_index_in_location(), game:raids_in_location()), 330, 5, M.COLOR_WHITE,
+			{anchor = M.TOP_CENTRE}),
+		info = text(M.info_text(game), 400, 500, M.COLOR_WHITE, {anchor = M.BOTTOM_CENTRE}),
 	}
 	ui.slider = ctx.slider / 100
+	local px, py = M.anchor_offset(M.BOTTOM_RIGHT)
+	ui.progress_rect = {x = M.PROGRESS.x + px, y = M.PROGRESS.y + py, w = M.PROGRESS.w, h = M.PROGRESS.h}
 	if ctx.tutorial_page > 0 then
 		local t = M.TUTORIAL_TEXT
 		ui.tutorial = text(d:tutorial_text(ctx.tutorial_page), t.x, t.y, M.COLOR_STORY, {spacing = t.spacing})
@@ -358,18 +406,19 @@ end
 
 -- --- messages ---------------------------------------------------------------------------
 
--- The message and gold popup lists of the HUD, laid out here:
--- newest message at the bottom, older ones stacked above, a multi-line message takes a
+-- The message and gold popup lists of the HUD, laid out here (the messages keep the
+-- bottom-left corner): newest message at the bottom, older ones stacked above, a multi-line message takes a
 -- slot per line; fading per tick.
 function M.layout_messages(messages, ticks, now_ms)
-	local y = M.MESSAGE_Y
+	local dx, dy = M.anchor_offset(M.BOTTOM_LEFT)
+	local y = M.MESSAGE_Y + dy
 	for i = #messages, 1, -1 do
 		local m = messages[i]
 		if now_ms >= m.end_ms then
 			m.alpha = m.alpha - M.MESSAGE_FADE * ticks
 		end
 		y = y - (m.lines - 1) * M.MESSAGE_STEP
-		m.x, m.y = M.MESSAGE_X, y
+		m.x, m.y = M.MESSAGE_X + dx, y
 		if m.alpha <= 0 then
 			table.remove(messages, i)
 		end

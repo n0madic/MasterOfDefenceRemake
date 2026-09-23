@@ -128,9 +128,13 @@ sounds are encoded from the original (`../tools/audio.py`).
 
 - High scores are two local top-10 tables (campaign, survival); the online submission and
   its "send" planks are gone, the survival sheet's remaining planks are centred.
-- Wide mode (a setting): the world fills the window, wider or taller than 4:3, the HUD
-  panel, the sheets and the gui stay in the centred 4:3 box; the cameras keep the 4:3 frame
-  in view (the vertical fov when wider, the horizontal one when taller). The menu backdrop
+- Wide mode (a setting): the world fills the window, wider or taller than 4:3; the cameras
+  keep the 4:3 frame in view (the vertical fov when wider, the horizontal one when taller).
+  The sheets and the gui keep the centred 4:3 box's coordinates, while the HUD's groups keep
+  the window's corners and edges inside its safe area, as in the Godot port: the exporter
+  gives the panel's vertices an anchor (`tools/targets/defold/hud_layout.py`, the stretching
+  planks cut at their thresholds) that the vertex shader shifts by the render script's
+  `hud_shift`, and `main/location/hud_model.lua` moves the gui widgets the same way. The menu backdrop
   allows 1.25:1 to 1.8:1. A location's camera range narrows by the extra ground the bigger
   view uncovers, and a location is drawn only as wide / tall as that range allows (location
   1 about 1.07:1 to 1.64:1, the others up to 2.3:1 to 2.9:1), so the wide view never shows

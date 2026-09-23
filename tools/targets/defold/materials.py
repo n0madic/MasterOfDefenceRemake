@@ -75,12 +75,6 @@ def order_tag(order: int, overlay: bool = False) -> str:
     return f"order_{name}"
 
 
-def canvas_tag(order: int) -> str:
-    """Render pass tag of a negative EntityOrder of an overlay sheet drawn across the whole
-    canvas (`canvas_m5`) rather than the 4:3 box: the loading curtain covers Wide's sides."""
-    return f"canvas_m{-order}"
-
-
 # The tower bases' ground layer (Military's `dno` brush): the location's `dno<N>.png`,
 # multiplied, relative to the tower models' folder (the converter's stand-in for the
 # `dno.png` the original never ships).
@@ -96,12 +90,12 @@ class MaterialVariant:
                  skinned: bool = False, morph_targets: int = 0, animmap: bool = False, lit_default: bool = False,
                  bone_count: int = 0, ground_base: bool = False, solid_depth: bool = False,
                  billboard: bool = False, frame_atlas: bool = False, node_rank: int | None = None,
-                 canvas: bool = False):
+                 anchored: bool = False):
         self._gltf_material = gltf_material
         self._info = info
         self._kwargs = dict(order=order, hud=hud, skinned=skinned, morph_targets=morph_targets,
                             animmap=animmap, lit_default=lit_default, bone_count=bone_count, billboard=billboard,
-                            frame_atlas=frame_atlas, node_rank=node_rank, canvas=canvas)
+                            frame_atlas=frame_atlas, node_rank=node_rank, anchored=anchored)
         self.base_name = base_name
         self.name = (gltf_material["name"] + (f"@order{order}" if order else "") + ("@base" if ground_base else "")
                      + ("@solid" if solid_depth else "") + ("@billboard" if billboard else "")
@@ -112,11 +106,10 @@ class MaterialVariant:
         self.bind_name = self.name
         self.order = order
         self.hud = hud
-        # An overlay sheet drawn across the whole canvas (see `canvas_tag`): only its negative
-        # orders, drawn last without the z-buffer, can leave the box.
-        if canvas and not (hud and order < 0):
-            raise ValueError(f"{self.name}: a canvas-wide brush needs a negative overlay order")
-        self.canvas = canvas
+        # A HUD brush whose vertices keep an edge or corner of a Wide canvas: the anchor
+        # (-1 / 0 / 1 per axis, blends in between) rides in `texcoord1` and the vertex
+        # shader shifts it by the render script's `hud_shift` (see hud_layout.py).
+        self.anchored = anchored
         # The tower base decal (`dno`) draws in its own pass between the opaque world and the
         # translucent tower bodies, so a translucent trunk cannot sort-flip with it; its
         # `solid_depth` companion writes the depth that occludes the tower's underground root.
@@ -210,8 +203,6 @@ class MaterialVariant:
             return [f"{'hud' if self.hud else 'world'}_solid", self.pass_class]
         if self.layer_rank is not None and self.pass_class != "opaque" and self.order == 0:
             return [f"{self.rank_layer}_l{self.layer_rank}", self.pass_class]
-        if self.canvas:
-            return [canvas_tag(self.order), self.pass_class]
         return [order_tag(self.order, self.hud), self.pass_class]
 
     @property
@@ -237,8 +228,10 @@ class MaterialVariant:
 
     def vertex_program(self) -> str:
         two = len(self.layers) > 1
+        if two and self.anchored:
+            raise ValueError(f"{self.name}: an anchored HUD brush keeps its anchor in texcoord1, a second layer needs it")
         lines = ["#version 140", "", "in highp vec4 position;", "in mediump vec3 normal;", "in mediump vec2 texcoord0;"]
-        if two:
+        if two or self.anchored:
             lines.append("in mediump vec2 texcoord1;")
         if self.vertex_colors:
             lines.append("in mediump vec4 color;")
@@ -266,6 +259,8 @@ class MaterialVariant:
                       "    highp vec4 point_light1;", "    mediump vec4 point_color1;"]
         if self.animmap:
             lines.append("    mediump vec4 uv_offset;")
+        if self.anchored:
+            lines.append("    mediump vec4 hud_shift;")
         if self.skinned:
             lines.append("    mediump vec4 animation_data;")
         if self.bone_count:
@@ -353,7 +348,18 @@ class MaterialVariant:
             # -- otherwise every sphere-mapped texture rendered upside down (the death
             # soul's `death.png` ghost showed point-up instead of point-down).
             lines.append("    var_sphere_uv = vec2(0.5 + 0.5 * n.x, 0.5 + 0.5 * n.y);")
-        lines += ["    gl_Position = mtx_proj * p;", "}", ""]
+        lines.append("    gl_Position = mtx_proj * p;")
+        if self.anchored:
+            # `hud_shift`: the clip-space shift of the left, top, right and bottom anchors
+            # (x, y, z, w); scaled by w it moves the vertex by the same screen distance at
+            # any depth. The side is the anchor's sign, like Godot's `anchor_shift_for`.
+            lines += [
+                # Defold flips the V of every imported glb texcoord (see the sphere map below).
+                "    vec2 anchor = vec2(texcoord1.x, 1.0 - texcoord1.y);",
+                "    vec2 side = vec2(anchor.x > 0.0 ? hud_shift.z : hud_shift.x, anchor.y > 0.0 ? hud_shift.w : hud_shift.y);",
+                "    gl_Position.xy += anchor * side * gl_Position.w;",
+            ]
+        lines += ["}", ""]
         return "\n".join(lines)
 
     def _morph_functions(self) -> list[str]:
@@ -516,6 +522,8 @@ class MaterialVariant:
             user_vs += [(name, value) for name, value in NEUTRAL_LIGHT.items()]
         if self.animmap:
             user_vs.append(("uv_offset", [0.0, 0.0, 0.0, 0.0]))
+        if self.anchored:
+            user_vs.append(("hud_shift", [0.0, 0.0, 0.0, 0.0]))
         for name, value in user_vs:
             out += ["vertex_constants {", f'  name: "{name}"', "  type: CONSTANT_TYPE_USER", "  value {",
                     f"    x: {fmt(value[0])}", f"    y: {fmt(value[1])}", f"    z: {fmt(value[2])}", f"    w: {fmt(value[3])}", "  }", "}"]

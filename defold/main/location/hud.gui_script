@@ -179,10 +179,11 @@ local function draw(self, ui)
 		end
 	end
 	-- Slider and progress bar.
-	local s = hud.SLIDER
+	local s = hud.by_name.slider
+	local edge = hud.SLIDER.edge
 	place(self.slider_track, s.x, s.y, s.w, s.h)
-	place(self.slider_knob, s.x + s.edge + ui.slider * (s.w - 2 * s.edge) - 16, s.y - 6)
-	local p = hud.PROGRESS
+	place(self.slider_knob, s.x + edge + ui.slider * (s.w - 2 * edge) - 16, s.y - 6)
+	local p = ui.progress_rect
 	place(self.progress_frame, p.x, p.y, p.w, p.h)
 	local fill = (p.w - 16) * math.max(0, math.min(100, ui.progress or 0)) / 100
 	gui.set_enabled(self.progress_fill, fill > 0)
@@ -240,6 +241,9 @@ function update(self, dt)
 	local t = now_ms()
 	local ticks = math.floor((t - self.last_ms) / TICK_MS)
 	self.last_ms = self.last_ms + ticks * TICK_MS
+	-- Wide mode: the anchored groups keep the canvas edges (the 3D panel's are shifted by
+	-- the render script from the same layout).
+	hud.set_anchor_shifts(screen.anchor_shifts(window.get_size()))
 	local popups = update_messages(self, ticks)
 	reveal_tutorial(self, ticks)
 	local hovered = hud.widget_at(self.mouse.x, self.mouse.y)
@@ -267,8 +271,9 @@ function on_message(self, message_id, message)
 end
 
 local function slider_value(self)
-	local s = hud.SLIDER
-	local frac = (self.mouse.x - s.x - s.edge) / (s.w - 2 * s.edge)
+	local s = hud.by_name.slider
+	local edge = hud.SLIDER.edge
+	local frac = (self.mouse.x - s.x - edge) / (s.w - 2 * edge)
 	return math.floor(math.max(0, math.min(1, frac)) * Ticker.SLIDER_MAX + 0.5)
 end
 

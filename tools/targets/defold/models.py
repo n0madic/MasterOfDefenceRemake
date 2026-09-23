@@ -46,6 +46,7 @@ from mat4 import (
     unit_normal,
 )
 
+from .hud_layout import Rule, anchor_mesh
 from .materials import MaterialVariant, gltf_color_to_blitz
 
 TAG_PREFIX = "B3DEXT_"
@@ -129,7 +130,7 @@ class ModelExporter:
                  *, hud: bool = False, lit_default: bool = False, posed: bool = False, keep_helpers: bool = False,
                  node_groups: tuple[str, ...] = (), exclude_nodes: tuple[str, ...] = (), only_node: str | None = None,
                  node_orders: dict[str, int] | None = None, rank_from: tuple[float, float, float] | None = None,
-                 canvas: bool = False):
+                 anchors: dict[str, Rule] | None = None):
         """`posed`: always take the bone-matrix path (menu scenes: the runtime needs every
         node's pose to hide, pick and follow nodes); `keep_helpers`: keep `Camera0*` nodes
         (cameraEnv parents its sky to the animated camera); `node_groups`: nodes that get a
@@ -138,8 +139,8 @@ class ModelExporter:
         game object the runtime moves, e.g. the clock hands); `node_orders`: EntityOrders the
         game sets at run time, by node name; `rank_from`: the camera position the translucent
         brushes of a bone-posed world model (see `_rank_layers`) or the nodes of a static
-        overlay (see `_rank_nodes`) are ordered from; `canvas`: an overlay sheet drawn across
-        the whole canvas (MaterialVariant.canvas)."""
+        overlay (see `_rank_nodes`) are ordered from; `anchors`: the Wide-screen anchor rules
+        of a HUD model's nodes (hud_layout.py) -- every vertex of the model gets an anchor."""
         self.key = key
         self.slug = key.replace("/", "_")
         self.glb_path = glb_path
@@ -150,13 +151,13 @@ class ModelExporter:
         self.out_dir = out_dir
         self.textures_root = textures_root.resolve()
         self.hud = hud
-        self.canvas = canvas
         self.lit_default = lit_default
         self.posed = posed
         self.keep_helpers = keep_helpers
         self.node_groups = set(node_groups)
         self.node_orders = dict(node_orders or {})
         self.rank_from = rank_from
+        self.anchors = anchors
         self.exclude_nodes = set(exclude_nodes)
         self.only_node = only_node
         self.node_parent: dict[int, int | None] = {}  # every node, helpers included
@@ -360,7 +361,7 @@ class ModelExporter:
                 skinned=self.skinned, morph_targets=targets, animmap=group.startswith(GROUP_ANIM), lit_default=self.lit_default,
                 bone_count=len(self.kept) if self.bone_posed else 0, ground_base=group == "dno",
                 billboard=billboard, frame_atlas=group in FRAME_ATLAS_NODES, node_rank=node_rank,
-                canvas=self.canvas)
+                anchored=self.anchors is not None)
         return self.variants[key]
 
     def _frame_atlas_texture(self, node_name: str, material_name: str) -> str | None:
@@ -407,9 +408,16 @@ class ModelExporter:
     def _add_primitive(self, b: GltfBuilder, index: int, prim: dict, variant: MaterialVariant, material_id: int,
                        joint_of: dict[int, int] | None) -> dict:
         attrs = prim["attributes"]
-        positions = read_accessor(self.doc, self.blob, attrs["POSITION"])
-        normals = read_accessor(self.doc, self.blob, attrs["NORMAL"])
+        names = ["POSITION", "NORMAL", "TEXCOORD_0"] + [n for n in ("TEXCOORD_1", "COLOR_0") if n in attrs]
+        data = {n: read_accessor(self.doc, self.blob, attrs[n]) for n in names}
         indices = list(read_accessor(self.doc, self.blob, prim["indices"]))
+        anchors = None
+        if self.anchors is not None:
+            # Cut along the node's anchor thresholds in its own (local) space, before any bake.
+            if prim.get("targets"):
+                raise ValueError(f"{self.key}: an anchored HUD mesh cannot have morph targets")
+            data, indices, anchors = anchor_mesh(data, indices, self.anchors.get(self.doc["nodes"][index].get("name", "")))
+        positions, normals = data["POSITION"], data["NORMAL"]
         bake = joint_of is not None
         if bake and not self.bone_posed:
             # Defold's own SRT skinning: the vertices are baked into rest-pose world space
@@ -433,14 +441,16 @@ class ModelExporter:
         out_attrs = {
             "POSITION": b.add_accessor(positions, "VEC3", target=TARGET_ARRAY_BUFFER, minmax=True),
             "NORMAL": b.add_accessor(normals, "VEC3", target=TARGET_ARRAY_BUFFER),
-            "TEXCOORD_0": b.add_accessor(read_accessor(self.doc, self.blob, attrs["TEXCOORD_0"]), "VEC2", target=TARGET_ARRAY_BUFFER),
+            "TEXCOORD_0": b.add_accessor(data["TEXCOORD_0"], "VEC2", target=TARGET_ARRAY_BUFFER),
         }
-        if len(variant.layers) > 1:
-            uv1 = read_accessor(self.doc, self.blob, attrs["TEXCOORD_1"]) if "TEXCOORD_1" in attrs else [(0.0, 0.0)] * len(positions)
+        if anchors is not None:
+            out_attrs["TEXCOORD_1"] = b.add_accessor(anchors, "VEC2", target=TARGET_ARRAY_BUFFER)
+        elif len(variant.layers) > 1:
+            uv1 = data.get("TEXCOORD_1", [(0.0, 0.0)] * len(positions))
             out_attrs["TEXCOORD_1"] = b.add_accessor(uv1, "VEC2", target=TARGET_ARRAY_BUFFER)
         if variant.vertex_colors:
-            if "COLOR_0" in attrs:
-                colors = [tuple(gltf_color_to_blitz(list(c), additive=variant.blend == 3)) for c in read_accessor(self.doc, self.blob, attrs["COLOR_0"])]
+            if "COLOR_0" in data:
+                colors = [tuple(gltf_color_to_blitz(list(c), additive=variant.blend == 3)) for c in data["COLOR_0"]]
             else:
                 colors = [(1.0, 1.0, 1.0, 1.0)] * len(positions)  # Blitz's default vertex colour
             out_attrs["COLOR_0"] = b.add_accessor(colors, "VEC4", target=TARGET_ARRAY_BUFFER)
@@ -693,6 +703,9 @@ class ModelExporter:
             "joints": {self.doc["nodes"][j].get("name", ""): i for j, i in self._joint_index().items()} if self.bone_posed else {},
             # Parent joint of every joint (0 = none), for hiding a node with its children.
             "joint_parents": self._joint_parents() if self.bone_posed else [],
+            # An anchored sheet hides the nodes parked outside the 4:3 frame (Godot
+            # HudLayout.cull_parked): their joint-local bounds.
+            "joint_bounds": self._joint_bounds() if self.bone_posed and self.anchors is not None else {},
             "morph_targets": max((v.morph_targets for v in self.variants.values()), default=0),
             "textures": dict(self.textures),
         }
@@ -700,6 +713,19 @@ class ModelExporter:
     def _joint_index(self) -> dict[int, int]:
         """Node index -> 1-based `bone_matrices` index."""
         return {j: i + 1 for i, j in enumerate(self._joint_order())}
+
+    def _joint_bounds(self) -> dict[int, list[float]]:
+        """1-based joint -> [min x, y, z, max x, y, z] of its drawn vertices (joint-local)."""
+        joints = self._joint_index()
+        out: dict[int, list[float]] = {}
+        for prims in self.groups.values():
+            for index, prim, _ in prims:
+                for p in read_accessor(self.doc, self.blob, prim["attributes"]["POSITION"]):
+                    box = out.setdefault(joints[index], [*p, *p])
+                    for k in range(3):
+                        box[k] = min(box[k], p[k])
+                        box[k + 3] = max(box[k + 3], p[k])
+        return dict(sorted(out.items()))
 
     def _joint_parents(self) -> list[int]:
         index = self._joint_index()

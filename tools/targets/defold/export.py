@@ -41,7 +41,8 @@ from mat4 import mat_mul, node_matrix, quat_rotate, rigid_pose, transform_point,
 
 from .hud import export_gradient, export_hud_atlas
 from .icons import export_icons
-from .materials import canvas_tag, fmt, order_tag
+from .hud_layout import MODEL_RULES as HUD_ANCHORS
+from .materials import fmt, order_tag
 from .models import ModelExporter, load_sidecar
 
 LOG = logging.getLogger("targets.defold")
@@ -75,9 +76,6 @@ MENU_SHEETS = {
 # EntityOrders the game sets at run time (`_floadmenu`): the loading sheet's black
 # curtain and plank are drawn over the menu without the z-buffer.
 SHEET_ORDERS = {"Menu/loading": {"fon": -5, "loading": -6}}
-# Sheets drawn across the whole canvas, not the 4:3 box: the loading curtain rises over the
-# full screen, so in Wide mode it must cover the menu world beside the box too.
-CANVAS_SHEETS = ("Menu/loading",)
 # The main menu's world: the castle scene and the animated camera carrying the sky.
 MENU_WORLD = ["Menu/env"]
 MENU_CAMERA = "Menu/cameraEnv"
@@ -292,13 +290,13 @@ class Exporter:
                 self.export_model(f"Monsters/{glb.stem}", glb, lit_default=True)
         for name in ROOT_MODELS:
             self.export_model(name, self.models_dir / f"{name}.glb", hud=name in HUD_MODELS,
-                              rank_from=HUD_PANEL_EYE if name == HUD_PANEL else None)
+                              rank_from=HUD_PANEL_EYE if name == HUD_PANEL else None, anchors=HUD_ANCHORS.get(name))
         self.export_menus()
 
     def export_menus(self) -> None:
         for key, groups in MENU_SHEETS.items():
             exporter = self.export_model(key, self.models_dir / f"{key}.glb", placed=True, hud=True, posed=True, node_groups=groups,
-                                         node_orders=SHEET_ORDERS.get(key), canvas=key in CANVAS_SHEETS)
+                                         node_orders=SHEET_ORDERS.get(key), anchors=HUD_ANCHORS.get(key))
             names = [n["name"] for n in exporter.doc["nodes"] if "mesh" in n and "name" in n]
             self.menus[key] = {"pick": exporter.pick_triangles(names)}
         camera = self.export_model(MENU_CAMERA, self.models_dir / f"{MENU_CAMERA}.glb", placed=True, keep_helpers=True)
@@ -401,8 +399,7 @@ class Exporter:
         """EntityOrders used by the exported materials of a layer: positive ones highest
         first, negative ones from -1 down (Blitz draws both with the z-buffer off: the
         positive before everything, the negative after everything, the lowest last)."""
-        orders = [o for o in range(-99, 100) if o != 0 and (
-            order_tag(o, overlay) in self.pass_tags or (overlay and o < 0 and canvas_tag(o) in self.pass_tags))]
+        orders = [o for o in range(-99, 100) if o != 0 and order_tag(o, overlay) in self.pass_tags]
         return sorted([o for o in orders if o > 0], reverse=True), sorted([o for o in orders if o < 0], reverse=True)
 
     def layer_passes(self, layer: str) -> list[dict]:
@@ -472,16 +469,8 @@ class Exporter:
         classes = ("opaque", "blend", "add", "mul")
 
         def unsorted_passes(orders: list[int], overlay: bool) -> list[dict]:
-            # An overlay order's canvas-wide brushes (MaterialVariant.canvas) draw right after
-            # its boxed ones, in the canvas's viewport.
-            out = []
-            for o in orders:
-                tags = [(order_tag(o, overlay), False)]
-                if overlay and o < 0 and canvas_tag(o) in self.pass_tags:
-                    tags.append((canvas_tag(o), True))
-                out += [{"tags": [tag, cls], "depth_test": False, "depth_write": False, "blend": cls, "canvas": canvas}
-                        for tag, canvas in tags for cls in classes]
-            return out
+            return [{"tags": [order_tag(o, overlay), cls], "depth_test": False, "depth_write": False, "blend": cls}
+                    for o in orders for cls in classes]
 
         world_first, world_last = self.used_orders(False)
         hud_first, hud_last = self.used_orders(True)
@@ -517,9 +506,9 @@ class Exporter:
         def pass_lines(name: str, items: list[dict]) -> list[str]:
             out = [f"M.{name} = {{"]
             for p in items:
-                out.append("    {tags = {%s}, depth_test = %s, depth_write = %s, color_write = %s, blend = \"%s\", canvas = %s}," % (
+                out.append("    {tags = {%s}, depth_test = %s, depth_write = %s, color_write = %s, blend = \"%s\"}," % (
                     ", ".join(f'"{t}"' for t in p["tags"]), str(p["depth_test"]).lower(), str(p["depth_write"]).lower(),
-                    str(p.get("color_write", True)).lower(), p["blend"], str(p.get("canvas", False)).lower()))
+                    str(p.get("color_write", True)).lower(), p["blend"]))
             return out + ["}"]
 
         lines = [GENERATED_HEADER,
@@ -662,6 +651,9 @@ class Exporter:
                 joints = ", ".join(f'["{name}"] = {index}' for name, index in meta["joints"].items() if name)
                 lines.append(f"    joints = {{{joints}}},")
                 lines.append(f"    joint_parents = {lua_list(meta['joint_parents'])},")
+            if meta["joint_bounds"]:
+                bounds = ", ".join(f"[{j}] = {{{', '.join(fmt(c) for c in box)}}}" for j, box in meta["joint_bounds"].items())
+                lines.append(f"    joint_bounds = {{{bounds}}},")
             if meta["frame_atlases"]:
                 lines.append("    frame_atlases = {")
                 for atlas in meta["frame_atlases"]:

@@ -68,6 +68,37 @@ function M.layout(win_w, win_h)
 	return canvas, box
 end
 
+-- The box's margins inside the canvas in box pixels (the box is 800x600 in them): left, top,
+-- right, bottom. Zero in 4:3.
+function M.margins(canvas, box)
+	local scale = box.w / M.WIDTH
+	return (box.x - canvas.x) / scale, (canvas.y + canvas.h - box.y - box.h) / scale,
+		(canvas.x + canvas.w - box.x - box.w) / scale, (box.y - canvas.y) / scale
+end
+
+-- How far the HUD groups anchored to the left, top, right and bottom move out from the box
+-- (godot DisplayManager.anchor_shift_for): the box's margin in the canvas less the part of
+-- the window's safe-area inset (window pixels, `inset_*` of window.get_safe_area; notches,
+-- rounded corners, the gesture bar) that the letterbox bars do not already cover. A group
+-- stays inside the safe area even when that pulls it into the box.
+function M.anchor_shifts_for(win_w, win_h, safe)
+	local canvas, box = M.layout(win_w, win_h)
+	local l, t, r, b = M.margins(canvas, box)
+	local scale = box.w / M.WIDTH
+	local function inset(value, bar)
+		return math.max(0, (value or 0) - bar) / scale
+	end
+	return l - inset(safe.inset_left, canvas.x), t - inset(safe.inset_top, win_h - canvas.y - canvas.h),
+		r - inset(safe.inset_right, win_w - canvas.x - canvas.w), b - inset(safe.inset_bottom, canvas.y)
+end
+
+local NO_INSETS = {}
+
+-- `anchor_shifts_for` of the engine's window.
+function M.anchor_shifts(win_w, win_h)
+	return M.anchor_shifts_for(win_w, win_h, window.get_safe_area and window.get_safe_area() or NO_INSETS)
+end
+
 -- The window size in the units of `action.x` / `action.y` fractions.
 local function window_rects()
 	local w, h = window.get_size()
@@ -85,15 +116,17 @@ local function fraction(action)
 	return action.x / M.WIDTH, 1 - action.y / M.HEIGHT, inside
 end
 
--- Mouse position of an input action in the 800x600 box with y pointing down (the HUD's
--- coordinates, docs/13), clamped to it; third result as `fraction`.
+-- Mouse position of an input action in the 800x600 box's coordinates with y pointing down
+-- (the HUD's, docs/13), clamped to the canvas (in Wide mode it reaches past the box, where
+-- the anchored HUD groups sit); third result as `fraction`.
 function M.mouse(action)
 	local fx, fy, inside = fraction(action)
-	local w, h, _, box = window_rects()
+	local w, h, canvas, box = window_rects()
 	local x = (fx * w - box.x) / box.w * M.WIDTH
 	-- `box.y` counts from the bottom, fy from the top.
 	local y = (fy * h - (h - box.y - box.h)) / box.h * M.HEIGHT
-	return math.max(0, math.min(M.WIDTH, x)), math.max(0, math.min(M.HEIGHT, y)), inside
+	local l, t, r, b = M.margins(canvas, box)
+	return math.max(-l, math.min(M.WIDTH + r, x)), math.max(-t, math.min(M.HEIGHT + b, y)), inside
 end
 
 -- Box point (y down) of a canvas point given as NDC (-1..1, y up), e.g. a world point
