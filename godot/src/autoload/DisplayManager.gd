@@ -57,7 +57,12 @@ var _window_size := Vector2i.ZERO  # the window size the current layout was made
 
 
 func _ready() -> void:
-	get_tree().root.size_changed.connect(_relayout)
+	# Deferred: the root emits `size_changed` from inside `Window._update_viewport_size`,
+	# which attaches the viewport to the screen only after the emit. A `content_scale_size`
+	# change made right there is overwritten by that outer attach, computed for the old
+	# content size -- the picture stays squeezed into the old letterbox while the canvas
+	# and the touch transform follow the new one (seen on a Galaxy Fold on unfold / fold).
+	get_tree().root.size_changed.connect(_relayout, CONNECT_DEFERRED)
 	set_process(not headless())
 
 
@@ -209,7 +214,7 @@ func _relayout() -> void:
 	var target := canvas_for(Vector2(root.size), aspect_limits) if wide else BOX
 	root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_KEEP
 	if Vector2(root.content_scale_size) != target:
-		root.content_scale_size = Vector2i(target)  # re-enters through `size_changed` with the same target
+		root.content_scale_size = Vector2i(target)  # comes back through `size_changed` with the same target
 	var canvas := _canvas_size()
 	canvas_size = canvas
 	ui_offset = box_offset(canvas)
